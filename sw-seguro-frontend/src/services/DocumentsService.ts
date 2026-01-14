@@ -354,89 +354,114 @@ export class DocumentVersionService {
   /**
    * Create a new document version
    */
-  static async createVersion(
-    documentId: string,
-    filename: string,
-    mimeType: string
-  ): Promise<string> {
-    if (!documentId || !filename || !mimeType) {
-      throw new ValidationError("Document ID, filename, and MIME type are required");
-    }
-
-    const { data, error } = await supabase.rpc("create_document_version", {
-      p_document_id: documentId,
-      p_filename: filename,
-      p_mime_type: mimeType,
-    });
-
-    if (error) {
-      console.error("Create version RPC error:", error);
-      throw new ApiError("CREATE_VERSION_FAILED", 500, `Backend error: ${error.message}`);
-    }
-
-    if (!data) {
-      console.error("No data returned from create_document_version RPC");
-      throw new ApiError("CREATE_VERSION_FAILED", 500, "No version ID returned from server");
-    }
-
-    // Extract version ID - handle multiple formats
-    let versionId: string | null = null;
-
-    if (typeof data === 'string') {
-      // If RPC returns string directly
-      versionId = data;
-    } else if (typeof data === 'object' && data !== null) {
-      // If RPC returns object, try common field names
-      versionId = data.id || data.version_id || data.data || null;
-    }
-
-    console.log("Version creation response:", { data, extractedId: versionId });
-    
-    if (!versionId || typeof versionId !== 'string') {
-      console.error("Failed to extract valid version ID from response:", { data, attempt: versionId });
-      throw new ApiError(
-        "CREATE_VERSION_FAILED",
-        500,
-        "Server did not return a valid version ID. Check your backend RPC function."
-      );
-    }
-
-    return versionId;
+static async createVersion(
+  documentId: string,
+  filename: string,
+  _mimeType: string // ignorado a propósito, forzamos PDF
+): Promise<{
+  versionId: string;
+  storagePath: string;
+  versionNum: number;
+}> {
+  if (!documentId || !filename) {
+    throw new ValidationError("Document ID and filename are required");
   }
+
+  // 🔒 Solo PDF (frontend)
+  const safeName = filename.toLowerCase().endsWith(".pdf")
+    ? filename
+    : `${filename}.pdf`;
+
+  // Forzamos MIME correcto (no confiamos en file.type)
+  const mimeType = "application/pdf";
+
+  const { data, error } = await supabase.rpc("create_document_version", {
+    p_document_id: documentId,
+    p_filename: safeName,
+    p_mime_type: mimeType,
+  });
+
+  if (error) {
+    console.error("create_document_version RPC error:", error);
+    throw new ApiError(
+      "CREATE_VERSION_FAILED",
+      400,
+      error.message || "Failed to create document version"
+    );
+  }
+
+  // ⚠️ RPC retorna RECORD → Supabase devuelve ARRAY
+  if (!Array.isArray(data) || data.length === 0) {
+    console.error("Unexpected RPC response:", data);
+    throw new ApiError(
+      "CREATE_VERSION_FAILED",
+      500,
+      "RPC create_document_version returned no rows"
+    );
+  }
+
+  const row = data[0];
+
+  const versionId = row.version_id ?? row.id;
+  const storagePath = row.storage_path;
+  const versionNum = row.version_num;
+
+  if (!versionId || !storagePath || !versionNum) {
+    console.error("Malformed RPC row:", row);
+    throw new ApiError(
+      "CREATE_VERSION_FAILED",
+      500,
+      "Invalid data returned from create_document_version"
+    );
+  }
+
+  return {
+    versionId,
+    storagePath,
+    versionNum,
+  };
+}
+
+
 
   /**
    * Finalize document version with file hash
    */
   static async finalizeVersion(
-    versionId: string,
-    sizeBytes: number,
-    mimeType: string,
-    sha256: string
-  ): Promise<void> {
-    if (!versionId || !sha256 || sizeBytes < 0) {
-      throw new ValidationError("Invalid version finalization parameters");
-    }
-
-    const { error } = await supabase.rpc("finalize_document_version", {
-      p_version_id: versionId,
-      p_size_bytes: sizeBytes,
-      p_mime_type: mimeType,
-      p_sha256: sha256,
-    });
-
-    if (error) {
-      console.error("Finalize version error:", error);
-      throw new ApiError("FINALIZE_VERSION_FAILED", 500, "Failed to finalize document version");
-    }
-
-    // Log audit event
-    await AuditService.logEvent({
-      action: "file_uploaded",
-      object_type: "file",
-      object_id: versionId,
-      metadata: { sizeBytes, sha256 },
-    });
+  versionId: string,
+  sizeBytes: number,
+  mimeType: string,
+  sha256?: string
+): Promise<void> {
+  if (!versionId || sizeBytes < 0) {
+    throw new ValidationError("Invalid version finalization parameters");
   }
+
+  // ✅ Solo PDF
+  if (mimeType.toLowerCase() !== "application/pdf") {
+    throw new ValidationError("Solo se permite MIME application/pdf");
+  }
+
+  const { error } = await supabase.rpc("finalize_document_version", {
+    p_version_id: versionId,
+    p_size_bytes: sizeBytes,
+    p_mime_type: "application/pdf",
+    p_sha256: sha256 ?? null,
+  });
+
+  if (error) {
+    console.error("Finalize version error:", error);
+    throw new ApiError("FINALIZE_VERSION_FAILED", 500, error.message);
+  }
+
+  await AuditService.logEvent({
+    action: "file_uploaded",
+    object_type: "file",
+    object_id: versionId,
+    metadata: { sizeBytes, sha256: sha256 ?? null },
+  });
+}
+
 
   /**
    * List versions for a document

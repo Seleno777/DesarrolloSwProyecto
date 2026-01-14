@@ -8,7 +8,11 @@ interface FileUploadProps {
   onUploadError: (error: string) => void;
 }
 
-export function FileUploadComponent({ documentId, onUploadSuccess, onUploadError }: FileUploadProps) {
+export function FileUploadComponent({
+  documentId,
+  onUploadSuccess,
+  onUploadError,
+}: FileUploadProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -23,7 +27,7 @@ export function FileUploadComponent({ documentId, onUploadSuccess, onUploadError
     }
 
     // Validar que sea PDF
-    if (file.type !== "application/pdf") {
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
       setError("❌ Solo se permiten archivos PDF");
       return;
     }
@@ -44,11 +48,9 @@ export function FileUploadComponent({ documentId, onUploadSuccess, onUploadError
 
   const calculateSHA256 = async (file: File): Promise<string> => {
     const buffer = await file.arrayBuffer();
-    // Usamos window.crypto en lugar del import de Node
     const hashBuffer = await window.crypto.subtle.digest("SHA-256", buffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-    return hashHex;
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   };
 
   const handleUpload = async () => {
@@ -62,45 +64,47 @@ export function FileUploadComponent({ documentId, onUploadSuccess, onUploadError
     setUploadProgress(0);
 
     try {
-      // 1. Crear versión del documento
-      const versionIdRaw = await DocumentVersionService.createVersion(
+      // 🔒 Forzar MIME PDF (no confiar en file.type)
+      const forcedMime = "application/pdf";
+
+      // 1) Crear versión (DB) -> retorna { versionId, storagePath, versionNum }
+      const { versionId, storagePath } = await DocumentVersionService.createVersion(
         documentId,
         selectedFile.name,
-        selectedFile.type
+        forcedMime
       );
 
-      const versionId = typeof versionIdRaw === 'object' ? (versionIdRaw as any).id : versionIdRaw;
-
-      if (!versionId || typeof versionId !== 'string') {
-        throw new Error("No se pudo obtener un ID de versión válido");
+      if (!versionId || !storagePath) {
+        throw new Error("No se pudo obtener un ID/path de versión válido");
       }
-
-      const filePath = `documents/${documentId}/${versionId}.pdf`;
 
       setUploadProgress(30);
 
+      // 2) Subir al Storage usando EXACTAMENTE el storagePath del backend
       const { error: uploadError } = await supabase.storage
-      .from("documents")
-      .upload(filePath, selectedFile, {
-        upsert: false,
-      });
+        .from("documents")
+        .upload(storagePath, selectedFile, {
+          contentType: forcedMime,
+          upsert: false,
+        });
 
       if (uploadError) {
+        console.error("Storage upload error:", uploadError);
         throw new Error(`Error en Storage: ${uploadError.message}`);
       }
 
       setUploadProgress(70);
 
-      // 3. Calcular SHA256
+      // 3) Calcular SHA256
       const sha256 = await calculateSHA256(selectedFile);
 
       setUploadProgress(85);
 
-      // 4. Finalizar versión
+      // 4) Finalizar versión
       await DocumentVersionService.finalizeVersion(
         versionId,
         selectedFile.size,
-        selectedFile.type,
+        forcedMime,
         sha256
       );
 
@@ -160,7 +164,7 @@ export function FileUploadComponent({ documentId, onUploadSuccess, onUploadError
         <input
           id="file-input"
           type="file"
-          accept=".pdf"
+          accept=".pdf,application/pdf"
           onChange={(e) => handleFileSelect(e.target.files?.[0] || null)}
           style={{ display: "none" }}
           disabled={uploading}
@@ -223,6 +227,7 @@ export function FileUploadComponent({ documentId, onUploadSuccess, onUploadError
         >
           {uploading ? "⏳ Subiendo..." : "📤 Subir"}
         </button>
+
         <button
           onClick={() => {
             setSelectedFile(null);
