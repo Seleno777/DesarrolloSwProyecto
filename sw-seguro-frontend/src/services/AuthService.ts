@@ -1,26 +1,103 @@
 import { supabase } from "../lib/supabase";
+import { validateInput } from "../lib/validation";
+import { SignInSchema, SignUpSchema, type SignInInput, type SignUpInput } from "../lib/validation";
+import { ApiError, AuthenticationError } from "../lib/errors";
+import { authLimiter, withRateLimit } from "../lib/rateLimit";
 
+/**
+ * Auth Service - Secure authentication
+ * All inputs validated with Zod
+ * Implements rate limiting for auth attempts
+ */
 export class AuthService {
-  static async signIn(email: string, password: string) {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    return data;
+  /**
+   * Sign in with email and password
+   */
+  static async signIn(input: SignInInput) {
+    return withRateLimit(authLimiter, async () => {
+      const validated = validateInput(SignInSchema, input);
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: validated.email,
+        password: validated.password,
+      });
+
+      if (error || !data.session) {
+        throw new AuthenticationError("Invalid email or password");
+      }
+
+      return data;
+    });
   }
 
+  /**
+   * Sign up with email and password
+   */
+  static async signUp(input: SignUpInput) {
+    return withRateLimit(authLimiter, async () => {
+      const validated = validateInput(SignUpSchema, input);
+
+      const { data, error } = await supabase.auth.signUp({
+        email: validated.email,
+        password: validated.password,
+      });
+
+      if (error) {
+        if (error.message.includes("already registered")) {
+          throw new ApiError("ALREADY_REGISTERED", 409, "Email is already registered");
+        }
+        throw new ApiError("SIGNUP_FAILED", 500, "Failed to create account");
+      }
+
+      return data;
+    });
+  }
+
+  /**
+   * Sign out
+   */
   static async signOut() {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   }
 
+  /**
+   * Get current session
+   */
   static async session() {
     const { data, error } = await supabase.auth.getSession();
     if (error) throw error;
     return data.session;
   }
 
+  /**
+   * Get current user
+   */
   static async user() {
     const { data, error } = await supabase.auth.getUser();
     if (error) throw error;
     return data.user;
+  }
+
+  /**
+   * Reset password for email
+   */
+  static async resetPasswordForEmail(email: string) {
+    const validated = validateInput(SignInSchema.pick({ email: true }), { email });
+
+    const { error } = await supabase.auth.resetPasswordForEmail(validated.email);
+    if (error) {
+      throw new ApiError("RESET_PASSWORD_FAILED", 500, "Failed to send password reset email");
+    }
+  }
+
+  /**
+   * Update user
+   */
+  static async updateUser(updates: { email?: string; password?: string }) {
+    const { error } = await supabase.auth.updateUser(updates);
+    if (error) {
+      throw new ApiError("UPDATE_USER_FAILED", 500, "Failed to update user");
+    }
   }
 }
