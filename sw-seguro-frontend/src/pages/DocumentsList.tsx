@@ -48,8 +48,8 @@ export default function DocumentsPage() {
   const effectiveTab: DocumentsTab = openDocId
     ? "shared-with-me"
     : allowedTabs.has(tabFromUrl as DocumentsTab)
-    ? (tabFromUrl as DocumentsTab)
-    : activeTab;
+      ? (tabFromUrl as DocumentsTab)
+      : activeTab;
 
   // sincroniza estado local con URL
   useEffect(() => {
@@ -130,30 +130,23 @@ export default function DocumentsPage() {
     try {
       const { data, error } = await supabase
         .from("document_grants")
-        .select(
-          `
-          document_id,
-          grantee_id,
-          granted_by,
-          can_view,
-          can_download,
-          can_edit,
-          can_share,
-          created_at,
-          revoked_at,
-          granted_via_link_id,
-          documents:document_id (
-            id,
-            title,
-            description,
-            classification,
-            owner_id,
-            created_at,
-            updated_at
-          )
-        `
-        )
-        .eq("grantee_id", user.id)          /* ✅ CLAVE */
+        .select(`
+    document_id,
+    grantee_id,
+    granted_by,
+    can_view,
+    can_download,
+    can_edit,
+    can_share,
+    created_at,
+    revoked_at,
+    granted_via_link_id,
+    documents:document_id (
+      id, title, description, classification, owner_id, created_at, updated_at
+    )
+  `)
+        .eq("grantee_id", user.id)
+        .eq("can_view", true)        // ✅ SOLO los que puede ver
         .is("revoked_at", null)
         .order("created_at", { ascending: false });
 
@@ -166,6 +159,7 @@ export default function DocumentsPage() {
       setLoadingShared(false);
     }
   };
+
 
   // ✅ scroll/highlight si viene open=... y limpiar open= para que no se quede “pegado”
   useEffect(() => {
@@ -206,6 +200,102 @@ export default function DocumentsPage() {
     const t4 = window.setTimeout(() => cleanupOpenParam(), 700);
     return () => window.clearTimeout(t4);
   }, [effectiveTab, loadingShared, openDocId, sharedDocuments, location.search, navigate]);
+
+  const handleView = async (docId: string) => {
+    try {
+      const versions = await DocumentVersionService.listVersions(docId);
+      if (!versions || versions.length === 0) {
+        alert("❌ No hay archivo para ver");
+        return;
+      }
+
+      const latestVersion = versions[0];
+      const storagePathRaw: string =
+        latestVersion.storage_path || latestVersion.storagePath;
+
+      if (!storagePathRaw || typeof storagePathRaw !== "string") {
+        alert("❌ No hay ruta de archivo (storage_path) para ver");
+        return;
+      }
+
+      const storagePath = storagePathRaw.replace(/^documents\//, "");
+
+      // ✅ Abrir en pestaña nueva usando URL firmada (si bucket es privado)
+      const { data, error } = await supabase.storage
+        .from("documents")
+        .createSignedUrl(storagePath, 60 * 10); // 10 min
+
+      if (error) throw new Error(error.message);
+      if (!data?.signedUrl) throw new Error("No se generó signedUrl");
+
+      window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    } catch (err: any) {
+      alert("❌ Error al ver: " + (err?.message || "Error desconocido"));
+    }
+  };
+
+  const handleViewShared = async (docId: string) => {
+    try {
+      const versions = await DocumentVersionService.listVersions(docId);
+      if (!versions || versions.length === 0) {
+        alert("❌ No hay archivo para ver");
+        return;
+      }
+
+      const latestVersion = versions[0];
+
+      const storagePathRaw: string =
+        latestVersion.storage_path ||
+        latestVersion.storagePath ||
+        latestVersion.storagePathRaw ||
+        "";
+
+      if (!storagePathRaw || typeof storagePathRaw !== "string") {
+        alert("❌ No hay ruta de archivo (storage_path) para ver");
+        return;
+      }
+
+      // 1) Normaliza: quita solo "/" al inicio (NO quites documents/ a la fuerza)
+      const p0 = storagePathRaw.replace(/^\/+/, "");
+
+      // 2) Prueba 2 candidatos:
+      // - tal cual
+      // - sin "documents/" por si tu DB lo guarda con prefijo de bucket
+      const candidates = Array.from(
+        new Set([p0, p0.replace(/^documents\//, "")].filter(Boolean))
+      );
+
+      let signedUrl: string | null = null;
+      let lastErr: any = null;
+
+      for (const path of candidates) {
+        const { data, error } = await supabase.storage
+          .from("documents")
+          .createSignedUrl(path, 60 * 10); // 10 min
+
+        if (!error && data?.signedUrl) {
+          signedUrl = data.signedUrl;
+          break;
+        }
+        lastErr = error;
+      }
+
+      if (!signedUrl) {
+        // deja un error más claro
+        const msg =
+          lastErr?.message ||
+          "No se pudo generar signedUrl. Revisa que storage_path coincida con el objeto en el bucket.";
+        throw new Error(msg);
+      }
+
+      window.open(signedUrl, "_blank", "noopener,noreferrer");
+    } catch (err: any) {
+      alert("❌ Error al ver: " + (err?.message || "Error desconocido"));
+    }
+  };
+
+
+
 
   const handleDownload = async (docId: string) => {
     try {
@@ -459,19 +549,12 @@ export default function DocumentsPage() {
                     <div className="card-actions">
                       <button
                         className="btn btn-sm btn-primary"
-                        title="Ver detalles"
-                        onClick={() => {
-                          alert(
-                            `📄 ${doc.title}\n\n${doc.classification}\n\nCreado: ${new Date(
-                              doc.created_at
-                            ).toLocaleDateString("es-ES")}\nActualizado: ${new Date(
-                              doc.updated_at
-                            ).toLocaleDateString("es-ES")}`
-                          );
-                        }}
+                        title="Ver documento"
+                        onClick={() => handleView(doc.id)}
                       >
-                        👁️ Detalles
+                        👁️ Ver
                       </button>
+
 
                       <button
                         className="btn btn-sm btn-secondary"
@@ -569,17 +652,11 @@ export default function DocumentsPage() {
                       {/* ✅ botones SOLO por permisos */}
                       <div className="card-actions">
                         {grant.can_view && (
-                          <button
-                            className="btn btn-sm btn-primary"
-                            onClick={() =>
-                              alert(
-                                `📄 ${doc?.title || "Documento"}\n\nPermisos:\n- Ver: ${grant.can_view}\n- Descargar: ${grant.can_download}\n- Editar: ${grant.can_edit}\n- Compartir: ${grant.can_share}`
-                              )
-                            }
-                          >
+                          <button className="btn btn-sm btn-primary" onClick={() => handleViewShared(grant.document_id)}>
                             👁️ Ver
                           </button>
                         )}
+
 
                         {grant.can_download && (
                           <button

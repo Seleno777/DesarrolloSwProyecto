@@ -5,6 +5,8 @@ import DocumentsList from "./pages/DocumentsList";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import ShareLinkAccess from "./pages/ShareLinkAccess";
 import "./styles/Auth.css";
+import DocumentViewer from "./pages/DocumentViewer";
+
 
 
 export default function App() {
@@ -17,6 +19,8 @@ export default function App() {
 
           {/* Share link access (public) */}
           <Route path="/share/:token" element={<ShareLinkAccess />} />
+          <Route path="/documents/view/:docId" element={<DocumentViewer />} />
+
          
         
 
