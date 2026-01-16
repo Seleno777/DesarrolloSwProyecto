@@ -1,26 +1,16 @@
 import React, { useState } from "react";
 import type { DocumentRow } from "../types/models";
 import "../styles/ShareAccessModal.css";
+import { ShareLinksService } from "../services/ShareLinksService";
 
 interface ShareAccessModalProps {
   document: DocumentRow;
-  onShare: (data: {
-    documentId: string;
-    email: string;
-    permissions: {
-      can_view: boolean;
-      can_download: boolean;
-      can_edit: boolean;
-      can_share: boolean;
-    };
-  }) => Promise<void>;
   onClose: () => void;
   isLoading?: boolean;
 }
 
 export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
   document,
-  onShare,
   onClose,
   isLoading = false,
 }) => {
@@ -31,68 +21,92 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
     can_edit: false,
     can_share: false,
   });
+
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
-  // Validar email
+  // Config simple (puedes exponerlo en UI si quieres)
+  const EXPIRES_IN_MINUTES = 60;
+  const MAX_USES = 10;
+
   const isValidEmail = (emailStr: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(emailStr);
   };
 
-  // Manejar envío
+  const togglePermission = (key: keyof typeof permissions) => {
+    if (isLoading || creating) return;
+    setPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
+    setShareUrl(null);
 
-    // Validaciones
-    if (!email.trim()) {
+    const emailTrim = email.trim().toLowerCase();
+
+    if (!emailTrim) {
       setError("Ingresa un email");
       return;
     }
-    if (!isValidEmail(email)) {
+    if (!isValidEmail(emailTrim)) {
       setError("Email inválido");
       return;
     }
-    if (!permissions.can_view && !permissions.can_download && !permissions.can_edit && !permissions.can_share) {
+    if (
+      !permissions.can_view &&
+      !permissions.can_download &&
+      !permissions.can_edit &&
+      !permissions.can_share
+    ) {
       setError("Debe otorgar al menos un permiso");
       return;
     }
 
+    setCreating(true);
     try {
-      await onShare({
-        documentId: document.id,
-        email: email.trim().toLowerCase(),
-        permissions,
+      // 1) Crear share link (token)
+      const link = await ShareLinksService.createShareLink({
+        document_id: document.id,
+        expires_in_minutes: EXPIRES_IN_MINUTES,
+        max_uses: MAX_USES,
       });
 
-      setSuccess("✅ Acceso concedido correctamente");
-      setTimeout(() => {
-        setEmail("");
-        setPermissions({
-          can_view: true,
-          can_download: true,
-          can_edit: false,
-          can_share: false,
-        });
-        onClose();
-      }, 1500);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Error al compartir");
-    }
-  };
+      // 2) Registrar recipient por email (cualquier correo)
+      await ShareLinksService.upsertShareLinkRecipient({
+        link_id: link.link_id,
+        recipient_email: emailTrim,
+        permissions: {
+          can_view: permissions.can_view,
+          can_download: permissions.can_download,
+          can_edit: permissions.can_edit,
+          can_share: permissions.can_share,
+        },
+        max_uses: MAX_USES,
+      });
 
-  // Toggle permiso
-  const togglePermission = (
-    key: keyof typeof permissions,
-    canToggle: boolean = true
-  ) => {
-    if (canToggle && !isLoading) {
-      setPermissions((prev) => ({
-        ...prev,
-        [key]: !prev[key],
-      }));
+      // 3) URL del link
+      const url = `${window.location.origin}/share/${link.token}`;
+      setShareUrl(url);
+
+      // 4) Copiar al clipboard (si falla, igual mostramos el url)
+      try {
+        await navigator.clipboard.writeText(url);
+        setSuccess("✅ Link creado y copiado al portapapeles");
+      } catch {
+        setSuccess("✅ Link creado. Copia el enlace manualmente.");
+      }
+
+      // Limpieza opcional
+      setEmail("");
+    } catch (err: any) {
+      setError(err?.message || "Error al crear link de acceso");
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -101,11 +115,11 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         {/* Encabezado */}
         <div className="modal-header">
-          <h2>🔗 Compartir Acceso</h2>
+          <h2>🔗 Compartir por enlace</h2>
           <button
             className="modal-close-btn"
             onClick={onClose}
-            disabled={isLoading}
+            disabled={isLoading || creating}
           >
             ✕
           </button>
@@ -119,6 +133,10 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
           <p>
             <strong>🏷️ Clasificación:</strong> {document.classification}
           </p>
+          <p style={{ color: "#666", marginTop: 8 }}>
+            Este link expira en <b>{EXPIRES_IN_MINUTES} min</b> y permite hasta{" "}
+            <b>{MAX_USES}</b> usos.
+          </p>
         </div>
 
         {/* Formulario */}
@@ -126,7 +144,7 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
           {/* Email */}
           <div className="form-group">
             <label htmlFor="share-email" className="form-label">
-              📧 Email del Usuario
+              📧 Email del destinatario
             </label>
             <input
               id="share-email"
@@ -134,108 +152,75 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="usuario@example.com"
-              disabled={isLoading}
+              disabled={isLoading || creating}
               className="form-input"
             />
             <p className="form-hint">
-              Ingresa el email del usuario que deseas autorizar
+              Se permitirá acceso solo si el usuario inicia sesión con ese email.
             </p>
           </div>
 
           {/* Permisos */}
           <div className="form-group">
-            <label className="form-label">🔐 Permisos a Otorgar</label>
+            <label className="form-label">🔐 Permisos</label>
             <div className="permissions-grid">
-              {/* Ver */}
               <div className="permission-item">
                 <label className="permission-checkbox">
                   <input
                     type="checkbox"
                     checked={permissions.can_view}
                     onChange={() => togglePermission("can_view")}
-                    disabled={isLoading}
+                    disabled={isLoading || creating}
                   />
-                  <span className="permission-name">👁️ Ver Documento</span>
+                  <span className="permission-name">👁️ Ver</span>
                 </label>
                 <p className="permission-description">
                   Puede abrir y visualizar el documento
                 </p>
               </div>
 
-              {/* Descargar */}
               <div className="permission-item">
                 <label className="permission-checkbox">
                   <input
                     type="checkbox"
                     checked={permissions.can_download}
                     onChange={() => togglePermission("can_download")}
-                    disabled={isLoading}
+                    disabled={isLoading || creating}
                   />
-                  <span className="permission-name">⬇️ Descargar Archivo</span>
+                  <span className="permission-name">⬇️ Descargar</span>
                 </label>
-                <p className="permission-description">
-                  Puede descargar el PDF a su computadora
-                </p>
+                <p className="permission-description">Puede descargar el PDF</p>
               </div>
 
-              {/* Editar */}
               <div className="permission-item">
                 <label className="permission-checkbox">
                   <input
                     type="checkbox"
                     checked={permissions.can_edit}
                     onChange={() => togglePermission("can_edit")}
-                    disabled={isLoading}
+                    disabled={isLoading || creating}
                   />
-                  <span className="permission-name">✏️ Editar Documento</span>
+                  <span className="permission-name">✏️ Editar</span>
                 </label>
                 <p className="permission-description">
-                  Puede modificar el contenido del documento
+                  Puede modificar el documento
                 </p>
               </div>
 
-              {/* Compartir */}
               <div className="permission-item">
                 <label className="permission-checkbox">
                   <input
                     type="checkbox"
                     checked={permissions.can_share}
                     onChange={() => togglePermission("can_share")}
-                    disabled={isLoading}
+                    disabled={isLoading || creating}
                   />
-                  <span className="permission-name">
-                    🔗 Compartir con Otros
-                  </span>
+                  <span className="permission-name">🔗 Compartir</span>
                 </label>
                 <p className="permission-description">
-                  Puede compartir este documento con otros usuarios
+                  Puede compartir con otros
                 </p>
               </div>
-            </div>
-          </div>
-
-          {/* Resumen de permisos */}
-          <div className="permissions-summary">
-            <p className="summary-title">📋 Resumen de permisos:</p>
-            <div className="summary-badges">
-              {permissions.can_view && (
-                <span className="badge badge-success">👁️ Ver</span>
-              )}
-              {permissions.can_download && (
-                <span className="badge badge-success">⬇️ Descargar</span>
-              )}
-              {permissions.can_edit && (
-                <span className="badge badge-warning">✏️ Editar</span>
-              )}
-              {permissions.can_share && (
-                <span className="badge badge-info">🔗 Compartir</span>
-              )}
-              {!permissions.can_view &&
-                !permissions.can_download &&
-                !permissions.can_edit &&
-                !permissions.can_share && (
-                  <span className="badge badge-danger">❌ Sin permisos</span>
-                )}
             </div>
           </div>
 
@@ -243,31 +228,70 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
           {error && <div className="alert alert-error">⚠️ {error}</div>}
           {success && <div className="alert alert-success">{success}</div>}
 
+          {/* Mostrar URL si existe */}
+          {shareUrl && (
+            <div
+              style={{
+                background: "#f3f4f6",
+                border: "1px solid #e5e7eb",
+                padding: 12,
+                borderRadius: 10,
+                marginTop: 12,
+                wordBreak: "break-all",
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>🔗 Enlace:</div>
+              <div style={{ fontSize: 13 }}>{shareUrl}</div>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(shareUrl);
+                    setSuccess("✅ Link copiado al portapapeles");
+                  } catch {
+                    setError("No se pudo copiar. Cópialo manualmente.");
+                  }
+                }}
+                disabled={isLoading || creating}
+                style={{
+                  marginTop: 10,
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: "#111827",
+                  color: "white",
+                  cursor: "pointer",
+                }}
+              >
+                Copiar link
+              </button>
+            </div>
+          )}
+
           {/* Botones */}
           <div className="modal-actions">
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || creating}
               className="btn btn-primary"
             >
-              {isLoading ? "🔄 Compartiendo..." : "✅ Conceder Acceso"}
+              {creating ? "🔄 Creando link..." : "✅ Crear link"}
             </button>
             <button
               type="button"
               onClick={onClose}
-              disabled={isLoading}
+              disabled={isLoading || creating}
               className="btn btn-secondary"
             >
               Cancelar
             </button>
           </div>
 
-          {/* Info de seguridad */}
           <div className="security-note">
             <p>
-              🔐 <strong>Nota de seguridad:</strong> El usuario recibirá una
-              notificación y podrá acceder desde "Compartidos Conmigo". Puedes
-              revocar el acceso en cualquier momento.
+              🔐 <strong>Importante:</strong> El destinatario deberá abrir el
+              enlace e iniciar sesión con el mismo email. El acceso expira y se
+              limita por usos.
             </p>
           </div>
         </form>

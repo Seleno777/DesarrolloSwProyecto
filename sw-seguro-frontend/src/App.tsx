@@ -3,7 +3,9 @@ import { AuthProvider } from "./auth/AuthProvider";
 import LoginPage from "./pages/Login";
 import DocumentsList from "./pages/DocumentsList";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
+import ShareLinkAccess from "./pages/ShareLinkAccess";
 import "./styles/Auth.css";
+
 
 export default function App() {
   return (
@@ -12,6 +14,11 @@ export default function App() {
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<LoginPage />} />
+
+          {/* Share link access (public) */}
+          <Route path="/share/:token" element={<ShareLinkAccess />} />
+         
+        
 
           {/* Protected routes */}
           <Route

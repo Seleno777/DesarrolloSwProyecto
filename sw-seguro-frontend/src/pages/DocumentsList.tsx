@@ -1,36 +1,94 @@
-import { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { useDocuments, useCreateDocument } from "../hooks/useDocuments";
 import { DocumentVersionService } from "../services/DocumentsService";
-import { ShareDocumentModal } from "../components/ShareDocumentModal";
 import { FileUploadComponent } from "../components/FileUploadComponent";
+import ShareLinkModal from "../components/ShareLinkModal";
 import { supabase } from "../lib/supabase";
 
-type DocumentsTab = "my-documents" | "shared-with-me" | "manage-access" | "audit-log" | "settings";
+type DocumentsTab =
+  | "my-documents"
+  | "shared-with-me"
+  | "manage-access"
+  | "audit-log"
+  | "settings";
 
 export default function DocumentsPage() {
   const { user, signOut } = useAuth();
   const { documents, loading, error, refetch } = useDocuments();
   const { create: createDoc, loading: creating, error: createError } = useCreateDocument();
+
+  // ✅ URL params
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const tabFromUrl = useMemo(() => (query.get("tab") || "").trim(), [query]);
+  const openDocId = useMemo(() => (query.get("open") || "").trim(), [query]);
+
+  const allowedTabs = useMemo(
+    () =>
+      new Set<DocumentsTab>([
+        "my-documents",
+        "shared-with-me",
+        "manage-access",
+        "audit-log",
+        "settings",
+      ]),
+    []
+  );
+
   const [activeTab, setActiveTab] = useState<DocumentsTab>("my-documents");
 
+  // effectiveTab:
+  // - Si viene open=..., forzamos shared-with-me para mostrarlo
+  // - Si viene tab válido, usamos ese
+  // - Si no, usamos estado local
+  const effectiveTab: DocumentsTab = openDocId
+    ? "shared-with-me"
+    : allowedTabs.has(tabFromUrl as DocumentsTab)
+    ? (tabFromUrl as DocumentsTab)
+    : activeTab;
+
+  // sincroniza estado local con URL
+  useEffect(() => {
+    if (effectiveTab !== activeTab) setActiveTab(effectiveTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveTab]);
+
+  // navegación de tabs: actualiza URL y elimina open
+  const goTab = (tab: DocumentsTab) => {
+    setActiveTab(tab);
+    const sp = new URLSearchParams(location.search);
+    sp.set("tab", tab);
+    sp.delete("open");
+    navigate(`/documents?${sp.toString()}`, { replace: true });
+  };
+
+  // Create doc form
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [classification, setClassification] = useState<"public" | "private" | "confidential" | "restricted">("private");
-  
-  // Para compartir
-  const [showShareModal, setShowShareModal] = useState(false);
+  const [classification, setClassification] = useState<
+    "public" | "private" | "confidential" | "restricted"
+  >("private");
+
+  // ShareLink modal
+  const [showShareLinkModal, setShowShareLinkModal] = useState(false);
   const [selectedDocForShare, setSelectedDocForShare] = useState<string | null>(null);
   const [selectedDocTitle, setSelectedDocTitle] = useState("");
 
-  // Para documentos compartidos
+  // Shared docs (grants)
   const [sharedDocuments, setSharedDocuments] = useState<any[]>([]);
   const [loadingShared, setLoadingShared] = useState(false);
 
+  // highlight/scroll en shared
+  const sharedCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [highlightSharedId, setHighlightSharedId] = useState<string>("");
+
   const handleCreateDocument = async (e: React.FormEvent) => {
     e.preventDefault();
-
     try {
       await createDoc(title, description, classification);
       setTitle("");
@@ -47,26 +105,43 @@ export default function DocumentsPage() {
     await signOut();
   };
 
-  // Cargar documentos compartidos cuando cambia el tab
+  const handleShareClick = (docId: string, docTitle: string) => {
+    setSelectedDocForShare(docId);
+    setSelectedDocTitle(docTitle);
+    setShowShareLinkModal(true);
+  };
+
+  // ✅ Cargar compartidos al entrar al tab (y cuando user cambia)
   useEffect(() => {
-    if (activeTab === "shared-with-me") {
+    if (effectiveTab === "shared-with-me") {
       loadSharedDocuments();
     }
-  }, [activeTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveTab, user?.id]);
 
+  // ✅ IMPORTANTE: Filtrar por grantee_id = user.id
   const loadSharedDocuments = async () => {
+    if (!user?.id) {
+      setSharedDocuments([]);
+      return;
+    }
+
     setLoadingShared(true);
     try {
       const { data, error } = await supabase
         .from("document_grants")
-        .select(`
+        .select(
+          `
           document_id,
+          grantee_id,
+          granted_by,
           can_view,
           can_download,
           can_edit,
           can_share,
           created_at,
           revoked_at,
+          granted_via_link_id,
           documents:document_id (
             id,
             title,
@@ -74,92 +149,125 @@ export default function DocumentsPage() {
             classification,
             owner_id,
             created_at,
-            updated_at,
-            profiles:owner_id (email)
+            updated_at
           )
-        `)
-        .is("revoked_at", null);
+        `
+        )
+        .eq("grantee_id", user.id)          /* ✅ CLAVE */
+        .is("revoked_at", null)
+        .order("created_at", { ascending: false });
 
       if (error) throw error;
       setSharedDocuments(data || []);
     } catch (err) {
       console.error("Error loading shared documents:", err);
+      setSharedDocuments([]);
     } finally {
       setLoadingShared(false);
     }
   };
 
-  const handleShareClick = (docId: string, docTitle: string) => {
-    setSelectedDocForShare(docId);
-    setSelectedDocTitle(docTitle);
-    setShowShareModal(true);
-  };
+  // ✅ scroll/highlight si viene open=... y limpiar open= para que no se quede “pegado”
+  useEffect(() => {
+    if (effectiveTab !== "shared-with-me") return;
+    if (loadingShared) return;
+    if (!openDocId) return;
+
+    const found = sharedDocuments.find((g) => g.document_id === openDocId);
+
+    const cleanupOpenParam = () => {
+      const sp = new URLSearchParams(location.search);
+      if (sp.get("open")) {
+        sp.delete("open");
+        sp.set("tab", "shared-with-me");
+        navigate(`/documents?${sp.toString()}`, { replace: true });
+      }
+    };
+
+    if (found) {
+      setHighlightSharedId(openDocId);
+
+      const t = window.setTimeout(() => {
+        const el = sharedCardRefs.current[openDocId];
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 150);
+
+      const t2 = window.setTimeout(() => setHighlightSharedId(""), 3500);
+
+      const t3 = window.setTimeout(() => cleanupOpenParam(), 700);
+
+      return () => {
+        window.clearTimeout(t);
+        window.clearTimeout(t2);
+        window.clearTimeout(t3);
+      };
+    }
+
+    const t4 = window.setTimeout(() => cleanupOpenParam(), 700);
+    return () => window.clearTimeout(t4);
+  }, [effectiveTab, loadingShared, openDocId, sharedDocuments, location.search, navigate]);
 
   const handleDownload = async (docId: string) => {
     try {
-      // Obtener la versión más reciente
       const versions = await DocumentVersionService.listVersions(docId);
-      if (versions.length === 0) {
+      if (!versions || versions.length === 0) {
         alert("❌ No hay archivo para descargar");
         return;
       }
 
       const latestVersion = versions[0];
-      const filePath = `documents/${docId}/${latestVersion.id}.pdf`;
+      const storagePathRaw: string = latestVersion.storage_path || latestVersion.storagePath;
 
-      // Obtener el archivo del storage
-      const { data, error } = await supabase.storage.from("documents").download(filePath);
-
-      if (error) {
-        throw new Error(error.message);
+      if (!storagePathRaw || typeof storagePathRaw !== "string") {
+        alert("❌ No hay ruta de archivo (storage_path) para descargar");
+        return;
       }
 
-      // Crear descarga
-      const blob = new Blob([data], { type: "application/pdf" });
-      const url = window.URL.createObjectURL(blob);
+      const storagePath = storagePathRaw.replace(/^documents\//, "");
+
+      const { data, error } = await supabase.storage.from("documents").download(storagePath);
+      if (error) throw new Error(error.message);
+      if (!data) throw new Error("No se recibió el archivo desde Storage");
+
+      const url = window.URL.createObjectURL(data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = latestVersion.filename;
+
+      const fileName =
+        latestVersion.filename ||
+        latestVersion.file_name ||
+        latestVersion.original_filename ||
+        storagePath.split("/").pop() ||
+        "documento.pdf";
+
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
+      a.remove();
       window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
     } catch (err: any) {
       alert("❌ Error al descargar: " + (err?.message || "Error desconocido"));
     }
   };
 
-  const handleDelete = async (docId: string) => {
-    if (confirm("¿Estás seguro de que quieres eliminar este documento? Esta acción no se puede deshacer.")) {
-      try {
-        // Aquí llamarías al servicio de eliminar
-        // await DocumentsService.deleteDocument({ document_id: docId });
-        alert("✅ Documento eliminado (función aún en desarrollo)");
-        refetch();
-      } catch (err) {
-        alert("❌ Error al eliminar documento");
-      }
-    }
-  };
-
-  const getClassificationLabel = (classification: string) => {
+  const getClassificationLabel = (c: string) => {
     const labels: Record<string, string> = {
       public: "🔓 Público",
       private: "🔒 Privado",
       confidential: "🔐 Confidencial",
       restricted: "⛔ Restringido",
     };
-    return labels[classification] || classification;
+    return labels[c] || c;
   };
 
-  const getClassificationColor = (classification: string) => {
+  const getClassificationColor = (c: string) => {
     const colors: Record<string, string> = {
       public: "#10b981",
       private: "#3b82f6",
       confidential: "#f59e0b",
       restricted: "#ef4444",
     };
-    return colors[classification] || "#6b7280";
+    return colors[c] || "#6b7280";
   };
 
   return (
@@ -172,9 +280,7 @@ export default function DocumentsPage() {
         </div>
         <div className="header-right">
           <div className="user-profile">
-            <div className="user-avatar">
-              {user?.email?.charAt(0).toUpperCase() || "U"}
-            </div>
+            <div className="user-avatar">{user?.email?.charAt(0).toUpperCase() || "U"}</div>
             <div className="user-details">
               <p className="user-email">{user?.email}</p>
               <p className="user-status">Conectado</p>
@@ -186,71 +292,60 @@ export default function DocumentsPage() {
         </div>
       </header>
 
-      {/* Tabs Navigation */}
+      {/* Tabs */}
       <nav className="documents-tabs">
         <button
-          onClick={() => setActiveTab("my-documents")}
-          className={`tab-button ${activeTab === "my-documents" ? "active" : ""}`}
+          onClick={() => goTab("my-documents")}
+          className={`tab-button ${effectiveTab === "my-documents" ? "active" : ""}`}
         >
           📑 Mis Documentos
         </button>
         <button
-          onClick={() => setActiveTab("shared-with-me")}
-          className={`tab-button ${activeTab === "shared-with-me" ? "active" : ""}`}
+          onClick={() => goTab("shared-with-me")}
+          className={`tab-button ${effectiveTab === "shared-with-me" ? "active" : ""}`}
         >
           👥 Compartidos Conmigo
         </button>
         <button
-          onClick={() => setActiveTab("manage-access")}
-          className={`tab-button ${activeTab === "manage-access" ? "active" : ""}`}
+          onClick={() => goTab("manage-access")}
+          className={`tab-button ${effectiveTab === "manage-access" ? "active" : ""}`}
         >
           🔐 Gestionar Accesos
         </button>
         <button
-          onClick={() => setActiveTab("audit-log")}
-          className={`tab-button ${activeTab === "audit-log" ? "active" : ""}`}
+          onClick={() => goTab("audit-log")}
+          className={`tab-button ${effectiveTab === "audit-log" ? "active" : ""}`}
         >
           📋 Historial de Auditoría
         </button>
         <button
-          onClick={() => setActiveTab("settings")}
-          className={`tab-button ${activeTab === "settings" ? "active" : ""}`}
+          onClick={() => goTab("settings")}
+          className={`tab-button ${effectiveTab === "settings" ? "active" : ""}`}
         >
           ⚙️ Configuración
         </button>
       </nav>
 
-      {/* Error Alert */}
-      {(error || createError) && (
-        <div className="alert alert-error">
-          ⚠️ {error || createError}
-        </div>
-      )}
+      {/* Errors */}
+      {(error || createError) && <div className="alert alert-error">⚠️ {error || createError}</div>}
 
-      {/* Share Modal */}
-      <ShareDocumentModal
-        isOpen={showShareModal}
+      {/* ShareLink Modal */}
+      <ShareLinkModal
+        isOpen={showShareLinkModal}
         documentId={selectedDocForShare || ""}
         documentTitle={selectedDocTitle}
-        onClose={() => setShowShareModal(false)}
-        onSuccess={() => {
-          refetch();
-          loadSharedDocuments();
-        }}
+        onClose={() => setShowShareLinkModal(false)}
       />
 
       {/* Tab Content */}
       <div className="tab-content">
         {/* My Documents */}
-        {activeTab === "my-documents" && (
+        {effectiveTab === "my-documents" && (
           <div className="section-my-documents">
             <div className="section-header">
               <h2>Mis Documentos</h2>
               {!showCreateForm && (
-                <button
-                  onClick={() => setShowCreateForm(true)}
-                  className="btn btn-primary btn-lg"
-                >
+                <button onClick={() => setShowCreateForm(true)} className="btn btn-primary btn-lg">
                   ➕ Crear Nuevo Documento
                 </button>
               )}
@@ -321,25 +416,6 @@ export default function DocumentsPage() {
               </div>
             )}
 
-            <div className="documents-stats">
-              <div className="stat-card">
-                <div className="stat-number">{documents.length}</div>
-                <div className="stat-label">Documentos Totales</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-number">{documents.filter(d => d.classification === "public").length}</div>
-                <div className="stat-label">Públicos</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-number">{documents.filter(d => d.classification === "private").length}</div>
-                <div className="stat-label">Privados</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-number">{documents.filter(d => d.classification === "confidential").length}</div>
-                <div className="stat-label">Confidenciales</div>
-              </div>
-            </div>
-
             {loading ? (
               <div className="loading-spinner">
                 <div className="spinner"></div>
@@ -350,10 +426,7 @@ export default function DocumentsPage() {
                 <div className="empty-icon">📭</div>
                 <h3>No tienes documentos todavía</h3>
                 <p>Crea tu primer documento para comenzar</p>
-                <button
-                  onClick={() => setShowCreateForm(true)}
-                  className="btn btn-primary btn-lg"
-                >
+                <button onClick={() => setShowCreateForm(true)} className="btn btn-primary btn-lg">
                   ➕ Crear Documento
                 </button>
               </div>
@@ -371,9 +444,7 @@ export default function DocumentsPage() {
                       </span>
                     </div>
 
-                    {doc.description && (
-                      <p className="card-description">{doc.description}</p>
-                    )}
+                    {doc.description && <p className="card-description">{doc.description}</p>}
 
                     <div className="card-meta">
                       <div className="meta-item">
@@ -384,23 +455,32 @@ export default function DocumentsPage() {
                       </div>
                     </div>
 
+                    {/* Acciones dueño */}
                     <div className="card-actions">
                       <button
                         className="btn btn-sm btn-primary"
                         title="Ver detalles"
                         onClick={() => {
-                          alert(`📄 ${doc.title}\n\n${doc.classification === 'public' ? '🔓 Público' : doc.classification === 'private' ? '🔒 Privado' : doc.classification === 'confidential' ? '🔐 Confidencial' : '⛔ Restringido'}\n\nCreado: ${new Date(doc.created_at).toLocaleDateString("es-ES")}\nActualizado: ${new Date(doc.updated_at).toLocaleDateString("es-ES")}`);
+                          alert(
+                            `📄 ${doc.title}\n\n${doc.classification}\n\nCreado: ${new Date(
+                              doc.created_at
+                            ).toLocaleDateString("es-ES")}\nActualizado: ${new Date(
+                              doc.updated_at
+                            ).toLocaleDateString("es-ES")}`
+                          );
                         }}
                       >
                         👁️ Detalles
                       </button>
+
                       <button
                         className="btn btn-sm btn-secondary"
-                        title="Compartir documento"
+                        title="Compartir por link"
                         onClick={() => handleShareClick(doc.id, doc.title)}
                       >
                         🔗 Compartir
                       </button>
+
                       <button
                         className="btn btn-sm btn-outline-danger"
                         title="Descargar documento"
@@ -410,7 +490,6 @@ export default function DocumentsPage() {
                       </button>
                     </div>
 
-                    {/* Mostrar componente de upload para este documento */}
                     <FileUploadComponent
                       documentId={doc.id}
                       onUploadSuccess={() => {
@@ -426,13 +505,14 @@ export default function DocumentsPage() {
           </div>
         )}
 
-        {/* Shared with Me */}
-        {activeTab === "shared-with-me" && (
+        {/* Shared with me */}
+        {effectiveTab === "shared-with-me" && (
           <div className="section-shared">
-            <h2>📤 Documentos Compartidos Conmigo</h2>
-            <div className="info-box">
-              <p>Aquí verás los documentos que otros usuarios han compartido contigo.</p>
-              <p>Puedes ver, descargar, editar o compartir según los permisos otorgados.</p>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <h2>📤 Documentos Compartidos Conmigo</h2>
+              <button className="btn btn-secondary" onClick={loadSharedDocuments} disabled={loadingShared}>
+                🔄 Refrescar
+              </button>
             </div>
 
             {loadingShared ? (
@@ -450,58 +530,57 @@ export default function DocumentsPage() {
               <div className="documents-grid">
                 {sharedDocuments.map((grant: any) => {
                   const doc = grant.documents;
-                  const ownerEmail = doc?.profiles?.email || "Desconocido";
-                  
+                  const sharedBy = grant?.granted_by || doc?.owner_id || "Desconocido";
+
+                  const isHighlight = highlightSharedId === grant.document_id;
+
                   return (
-                    <div key={`${grant.document_id}-${ownerEmail}`} className="document-card">
+                    <div
+                      key={`${grant.document_id}-${grant.created_at}`}
+                      ref={(el) => {
+                        sharedCardRefs.current[grant.document_id] = el;
+                      }}
+                      className="document-card"
+                      style={{
+                        background: isHighlight ? "#dcfce7" : undefined,
+                        boxShadow: isHighlight ? "0 0 0 3px rgba(34,197,94,0.35)" : undefined,
+                        transition: "all 200ms ease",
+                      }}
+                    >
                       <div className="card-header">
-                        <h3 className="card-title">{doc?.title}</h3>
+                        <h3 className="card-title">{doc?.title || grant.document_id}</h3>
                         <span
                           className="badge"
-                          style={{ backgroundColor: getClassificationColor(doc?.classification) }}
+                          style={{ backgroundColor: getClassificationColor(doc?.classification || "private") }}
                         >
-                          {getClassificationLabel(doc?.classification)}
+                          {getClassificationLabel(doc?.classification || "private")}
                         </span>
                       </div>
 
-                      {doc?.description && (
-                        <p className="card-description">{doc.description}</p>
-                      )}
+                      {doc?.description && <p className="card-description">{doc.description}</p>}
 
                       <div className="card-meta">
-                        <div className="meta-item">
-                          👤 Compartido por: {ownerEmail}
-                        </div>
+                        <div className="meta-item">👤 Compartido por: {sharedBy}</div>
                         <div className="meta-item">
                           📅 Desde: {new Date(grant.created_at).toLocaleDateString("es-ES")}
                         </div>
                       </div>
 
-                      {/* Mostrar permisos */}
-                      <div style={{ padding: "12px", backgroundColor: "#f0f9ff", borderRadius: "8px", marginBottom: "12px" }}>
-                        <p style={{ margin: "0 0 8px 0", fontSize: "12px", fontWeight: "500", color: "#0369a1" }}>
-                          Permisos:
-                        </p>
-                        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                          {grant.can_view && <span style={{ backgroundColor: "#10b981", color: "white", padding: "4px 8px", borderRadius: "4px", fontSize: "12px" }}>👁️ Ver</span>}
-                          {grant.can_download && <span style={{ backgroundColor: "#3b82f6", color: "white", padding: "4px 8px", borderRadius: "4px", fontSize: "12px" }}>⬇️ Descargar</span>}
-                          {grant.can_edit && <span style={{ backgroundColor: "#f59e0b", color: "white", padding: "4px 8px", borderRadius: "4px", fontSize: "12px" }}>✏️ Editar</span>}
-                          {grant.can_share && <span style={{ backgroundColor: "#8b5cf6", color: "white", padding: "4px 8px", borderRadius: "4px", fontSize: "12px" }}>🔗 Compartir</span>}
-                        </div>
-                      </div>
-
+                      {/* ✅ botones SOLO por permisos */}
                       <div className="card-actions">
                         {grant.can_view && (
                           <button
                             className="btn btn-sm btn-primary"
-                            onClick={() => {
-                              const perms = [grant.can_view && '👁️ Ver', grant.can_download && '⬇️ Descargar', grant.can_edit && '✏️ Editar', grant.can_share && '🔗 Compartir'].filter(Boolean).join(' | ');
-                              alert(`📄 ${doc?.title}\n\n👤 Propietario: ${ownerEmail}\n\n${perms}`);
-                            }}
+                            onClick={() =>
+                              alert(
+                                `📄 ${doc?.title || "Documento"}\n\nPermisos:\n- Ver: ${grant.can_view}\n- Descargar: ${grant.can_download}\n- Editar: ${grant.can_edit}\n- Compartir: ${grant.can_share}`
+                              )
+                            }
                           >
                             👁️ Ver
                           </button>
                         )}
+
                         {grant.can_download && (
                           <button
                             className="btn btn-sm btn-secondary"
@@ -510,10 +589,20 @@ export default function DocumentsPage() {
                             ⬇️ Descargar
                           </button>
                         )}
+
+                        {grant.can_edit && (
+                          <button
+                            className="btn btn-sm btn-outline-danger"
+                            onClick={() => alert("✏️ Editar: (pendiente de implementar editor)")}
+                          >
+                            ✏️ Editar
+                          </button>
+                        )}
+
                         {grant.can_share && (
                           <button
                             className="btn btn-sm btn-secondary"
-                            onClick={() => handleShareClick(grant.document_id, doc?.title)}
+                            onClick={() => handleShareClick(grant.document_id, doc?.title || "Documento")}
                           >
                             🔗 Compartir
                           </button>
@@ -528,13 +617,9 @@ export default function DocumentsPage() {
         )}
 
         {/* Manage Access */}
-        {activeTab === "manage-access" && (
+        {effectiveTab === "manage-access" && (
           <div className="section-access">
-            <h2>🔐 Gestionar Accesos a Documentos</h2>
-            <div className="info-box">
-              <p>Control completo sobre quién puede acceder a tus documentos.</p>
-              <p>Define permisos de visualización, descarga, edición y compartir.</p>
-            </div>
+            <h2>🔐 Gestionar Accesos</h2>
 
             {documents.length === 0 ? (
               <div className="empty-state">
@@ -546,58 +631,17 @@ export default function DocumentsPage() {
                   <div key={doc.id} className="access-card">
                     <div className="access-header">
                       <h4>{doc.title}</h4>
-                      <span className="badge" style={{ backgroundColor: getClassificationColor(doc.classification) }}>
+                      <span
+                        className="badge"
+                        style={{ backgroundColor: getClassificationColor(doc.classification) }}
+                      >
                         {getClassificationLabel(doc.classification)}
                       </span>
                     </div>
+
                     <div className="access-actions">
-                      <button 
-                        className="btn btn-sm btn-primary"
-                        onClick={() => {
-                          setSelectedDocForShare(doc.id);
-                          setSelectedDocTitle(doc.title);
-                          setShowShareModal(true);
-                        }}
-                      >
-                        👥 Agregar Usuario
-                      </button>
-                      <button 
-                        className="btn btn-sm btn-secondary"
-                        onClick={async () => {
-                          try {
-                            const { DocumentGrantService } = await import("../services/DocumentsService");
-                            const grants = await DocumentGrantService.listGrants(doc.id);
-                            if (grants.length === 0) {
-                              alert("Este documento no tiene accesos compartidos");
-                            } else {
-                              const grantsList = grants.map((g: any) => `• ${g.grantee_id}`).join("\n");
-                              alert(`Accesos compartidos:\n\n${grantsList}`);
-                            }
-                          } catch (err) {
-                            alert("Error: " + (err as any).message);
-                          }
-                        }}
-                      >
-                        📋 Ver Accesos
-                      </button>
-                      <button 
-                        className="btn btn-sm btn-outline-danger"
-                        onClick={async () => {
-                          try {
-                            const { ShareLinksService } = await import("../services/ShareLinksService");
-                            const result = await ShareLinksService.createShareLink({
-                              document_id: doc.id,
-                              expires_in_minutes: 1440,
-                              max_uses: 10,
-                            });
-                            const shareLink = `${window.location.origin}?share_token=${result.token}`;
-                            alert(`✅ Enlace creado\n\nURL: ${shareLink}\n\nExpira: ${new Date(result.expires_at).toLocaleDateString()}`);
-                          } catch (err) {
-                            alert("Error: " + (err as any).message);
-                          }
-                        }}
-                      >
-                        🔗 Crear Enlace
+                      <button className="btn btn-sm btn-primary" onClick={() => handleShareClick(doc.id, doc.title)}>
+                        🔗 Crear link para email
                       </button>
                     </div>
                   </div>
@@ -608,116 +652,18 @@ export default function DocumentsPage() {
         )}
 
         {/* Audit Log */}
-        {activeTab === "audit-log" && (
+        {effectiveTab === "audit-log" && (
           <div className="section-audit">
             <h2>📋 Historial de Auditoría</h2>
-            <div className="info-box">
-              <p>Registro completo de todas las acciones realizadas en el sistema.</p>
-              <p>Incluye creación, actualización, acceso, compartir y descarga de documentos.</p>
-            </div>
-
-            <div className="audit-filters">
-              <input type="date" placeholder="Desde fecha" className="form-input" />
-              <input type="date" placeholder="Hasta fecha" className="form-input" />
-              <select className="form-input">
-                <option>Todos los tipos de evento</option>
-                <option>Documentos creados</option>
-                <option>Documentos actualizados</option>
-                <option>Documentos eliminados</option>
-                <option>Acceso otorgado</option>
-                <option>Acceso revocado</option>
-              </select>
-              <button className="btn btn-primary">🔍 Filtrar</button>
-            </div>
-
-            <div className="audit-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Fecha</th>
-                    <th>Evento</th>
-                    <th>Usuario</th>
-                    <th>Documento</th>
-                    <th>Detalles</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>12 Ene 2026 11:30</td>
-                    <td>📄 Documento Creado</td>
-                    <td>{user?.email}</td>
-                    <td>-</td>
-                    <td>Nuevo documento creado</td>
-                  </tr>
-                  <tr>
-                    <td>11 Ene 2026 15:45</td>
-                    <td>👤 Acceso Otorgado</td>
-                    <td>{user?.email}</td>
-                    <td>-</td>
-                    <td>Permiso de lectura concedido</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <p>(Pendiente de implementar)</p>
           </div>
         )}
 
         {/* Settings */}
-        {activeTab === "settings" && (
+        {effectiveTab === "settings" && (
           <div className="section-settings">
             <h2>⚙️ Configuración</h2>
-
-            <div className="settings-group">
-              <h3>👤 Perfil de Usuario</h3>
-              <div className="settings-card">
-                <div className="setting-item">
-                  <label>Email</label>
-                  <p className="setting-value">{user?.email}</p>
-                </div>
-                <div className="setting-item">
-                  <label>Estado de la Cuenta</label>
-                  <p className="setting-value">✓ Activa y Verificada</p>
-                </div>
-                <button className="btn btn-secondary">✎ Editar Perfil</button>
-              </div>
-            </div>
-
-            <div className="settings-group">
-              <h3>🔒 Seguridad</h3>
-              <div className="settings-card">
-                <div className="setting-item">
-                  <label>Contraseña</label>
-                  <p className="setting-value">Última actualización: hace 30 días</p>
-                </div>
-                <button className="btn btn-secondary">🔑 Cambiar Contraseña</button>
-              </div>
-            </div>
-
-            <div className="settings-group">
-              <h3>🔔 Notificaciones</h3>
-              <div className="settings-card">
-                <div className="setting-item checkbox">
-                  <input type="checkbox" id="notify-share" defaultChecked />
-                  <label htmlFor="notify-share">Notificar cuando compartan documentos conmigo</label>
-                </div>
-                <div className="setting-item checkbox">
-                  <input type="checkbox" id="notify-access" defaultChecked />
-                  <label htmlFor="notify-access">Notificar cambios de permisos</label>
-                </div>
-                <div className="setting-item checkbox">
-                  <input type="checkbox" id="notify-download" />
-                  <label htmlFor="notify-download">Notificar descargas de documentos</label>
-                </div>
-              </div>
-            </div>
-
-            <div className="settings-group">
-              <h3>⚡ Peligro</h3>
-              <div className="settings-card danger">
-                <p>⚠️ Estas acciones son irreversibles</p>
-                <button className="btn btn-outline-danger">🗑️ Eliminar Cuenta</button>
-              </div>
-            </div>
+            <p>(Pendiente de implementar)</p>
           </div>
         )}
       </div>
