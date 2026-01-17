@@ -26,7 +26,7 @@ export default function DocumentViewer() {
   const { docId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
 
   const mode = useMemo(() => {
     const sp = new URLSearchParams(location.search);
@@ -35,7 +35,7 @@ export default function DocumentViewer() {
 
   const intent = useMemo(() => {
     const sp = new URLSearchParams(location.search);
-    return (sp.get("intent") || "").trim(); // "edit" opcional
+    return (sp.get("intent") || "").trim(); // "download" opcional
   }, [location.search]);
 
   const [loading, setLoading] = useState(true);
@@ -61,7 +61,7 @@ export default function DocumentViewer() {
     toastTimerRef.current = window.setTimeout(() => setToast((t) => ({ ...t, open: false })), 2600);
   };
 
-  // StrictMode DEV guard (evita doble ejecución en dev)
+  // StrictMode DEV guard
   const lastRunKeyRef = useRef<string>("");
   const runIdRef = useRef(0);
 
@@ -74,10 +74,9 @@ export default function DocumentViewer() {
     }
   };
 
-  // ⚠️ Best-effort: ocultar UI del visor nativo (no siempre funciona en Chrome/Edge)
+  // ocultar UI del visor nativo (best-effort)
   const withPdfViewerParams = useMemo(() => {
-    return (url: string) =>
-      `${url}#zoom=page-width&toolbar=0&navpanes=0&scrollbar=0`;
+    return (url: string) => `${url}#zoom=page-width&toolbar=0&navpanes=0&scrollbar=0`;
   }, []);
 
   const back = () => {
@@ -91,10 +90,7 @@ export default function DocumentViewer() {
 
     const TTL_SECONDS = 60 * 5;
 
-    const { data, error } = await supabase.storage
-      .from("documents")
-      .createSignedUrl(path, TTL_SECONDS);
-
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, TTL_SECONDS);
     if (error) throw error;
     if (!data?.signedUrl) throw new Error("No se generó signedUrl.");
 
@@ -106,17 +102,45 @@ export default function DocumentViewer() {
     }, Math.max(5_000, (TTL_SECONDS - 30) * 1000));
   };
 
-  const loadLatestAndSign = async (docId: string) => {
+  const getLatestStoragePath = async (docId: string) => {
     const versions = await DocumentVersionService.listVersions(docId);
-    if (!versions || versions.length === 0) throw new Error("No hay archivo para ver.");
+    if (!versions || versions.length === 0) throw new Error("No hay archivo.");
 
     const latest = versions[0];
-    const storagePathRaw: string =
-      latest.storage_path || latest.storagePath || latest.storagePathRaw || "";
-
+    const storagePathRaw: string = latest.storage_path || latest.storagePath || latest.storagePathRaw || "";
     if (!storagePathRaw) throw new Error("No hay storage_path.");
 
+    const storagePath = storagePathRaw.replace(/^documents\//, "");
+    const fileName =
+      latest.filename ||
+      latest.file_name ||
+      latest.original_filename ||
+      storagePath.split("/").pop() ||
+      "documento.pdf";
+
+    return { storagePathRaw, storagePath, fileName };
+  };
+
+  const loadLatestAndSign = async (docId: string) => {
+    const { storagePathRaw } = await getLatestStoragePath(docId);
     await generateSignedUrl(storagePathRaw);
+  };
+
+  const downloadLatest = async (docId: string) => {
+    const { storagePath, fileName } = await getLatestStoragePath(docId);
+
+    const { data, error } = await supabase.storage.from("documents").download(storagePath);
+    if (error) throw new Error(error.message);
+    if (!data) throw new Error("No se recibió el archivo desde Storage");
+
+    const url = window.URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
   };
 
   const runLoad = async (myRunId: number) => {
@@ -174,13 +198,18 @@ export default function DocumentViewer() {
           throw new Error("Acceso expirado.");
         }
 
+        // ✅ Si intent=download, exigir permiso de descarga
+        if (intent === "download" && !grant.can_download) {
+          throw new Error("No tienes permiso para descargar.");
+        }
+
         setGrantInfo(grant as GrantRow);
         setExpiresAt(grant.expires_at || null);
       } else {
         // owner
         if (doc.owner_id !== user.id) throw new Error("No eres el dueño de este documento.");
 
-        // restricted => pedir password por modal (solo 1 vez)
+        // restricted => pedir password por modal
         if (doc.classification === "restricted") {
           setShowPwdModal(true);
           setLoading(false);
@@ -188,13 +217,15 @@ export default function DocumentViewer() {
         }
       }
 
-      // 3) cargar PDF
-      await loadLatestAndSign(docId);
-
-      if (intent === "edit" && mode === "shared") {
-        // No abrimos nada raro, solo informamos.
-        showToast("info", "Modo edición: sube una nueva versión desde tu panel (si aplica).");
+      // 3) intent: download o view
+      if (intent === "download") {
+        await downloadLatest(docId);
+        showToast("success", "✅ Descarga iniciada");
+        back();
+        return;
       }
+
+      await loadLatestAndSign(docId);
     } catch (e: any) {
       setErr(e?.message || "Error desconocido");
     } finally {
@@ -202,7 +233,7 @@ export default function DocumentViewer() {
     }
   };
 
-  const validateRestrictedPasswordAndLoad = async () => {
+  const validateRestrictedPasswordAndContinue = async () => {
     if (!docId) return;
 
     if (!pwdInput) {
@@ -214,10 +245,10 @@ export default function DocumentViewer() {
     setPwdErr("");
 
     try {
-      const { data: ok, error: vErr } = await supabase.rpc(
-        "verify_restricted_password_v2",
-        { p_document_id: docId, p_password: pwdInput }
-      );
+      const { data: ok, error: vErr } = await supabase.rpc("verify_restricted_password_v2", {
+        p_document_id: docId,
+        p_password: pwdInput,
+      });
 
       if (vErr) throw vErr;
       if (!ok) {
@@ -227,6 +258,14 @@ export default function DocumentViewer() {
 
       setShowPwdModal(false);
       setLoading(true);
+
+      // Si venías por download, descarga; si no, muestra PDF
+      if (intent === "download") {
+        await downloadLatest(docId);
+        showToast("success", "✅ Descarga iniciada");
+        back();
+        return;
+      }
 
       await loadLatestAndSign(docId);
       showToast("success", "Acceso concedido al documento restringido.");
@@ -242,7 +281,7 @@ export default function DocumentViewer() {
   useEffect(() => {
     if (!docId || !user?.id) return;
 
-    const key = `${docId}|${user.id}|${mode}`;
+    const key = `${docId}|${user.id}|${mode}|${intent}`;
     if (import.meta.env.DEV && lastRunKeyRef.current === key) return;
     lastRunKeyRef.current = key;
 
@@ -256,9 +295,9 @@ export default function DocumentViewer() {
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docId, user?.id, mode]);
+  }, [docId, user?.id, mode, intent]);
 
-  // auto-kick cuando expire (solo modo shared)
+  // ✅ auto-kick cuando expire (modo shared)
   useEffect(() => {
     if (mode !== "shared") return;
     if (!expiresAt) return;
@@ -267,7 +306,7 @@ export default function DocumentViewer() {
     const msLeft = expMs - Date.now();
 
     const kick = async () => {
-      await supabase.auth.signOut();
+      await signOut();
       navigate("/login?reason=share_expired", { replace: true });
     };
 
@@ -278,7 +317,7 @@ export default function DocumentViewer() {
 
     const t = window.setTimeout(kick, msLeft);
     return () => window.clearTimeout(t);
-  }, [expiresAt, mode, navigate]);
+  }, [expiresAt, mode, navigate, signOut]);
 
   const pill = (text: string, bg: string, fg: string) => (
     <span
@@ -296,10 +335,8 @@ export default function DocumentViewer() {
     </span>
   );
 
-  const toastBg =
-    toast.kind === "success" ? "#dcfce7" : toast.kind === "error" ? "#fee2e2" : "#e0f2fe";
-  const toastFg =
-    toast.kind === "success" ? "#166534" : toast.kind === "error" ? "#991b1b" : "#075985";
+  const toastBg = toast.kind === "success" ? "#dcfce7" : toast.kind === "error" ? "#fee2e2" : "#e0f2fe";
+  const toastFg = toast.kind === "success" ? "#166534" : toast.kind === "error" ? "#991b1b" : "#075985";
 
   return (
     <div style={{ height: "100vh", width: "100vw", display: "flex", flexDirection: "column", background: "#f6f7fb" }}>
@@ -326,6 +363,7 @@ export default function DocumentViewer() {
           <span style={{ fontSize: 12, opacity: 0.7 }}>
             {mode === "owner" ? "Modo: Dueño" : "Modo: Compartido"}
             {docInfo?.classification ? ` · Clasificación: ${docInfo.classification}` : ""}
+            {intent === "download" ? " · Acción: Descargar" : ""}
           </span>
         </div>
 
@@ -347,7 +385,7 @@ export default function DocumentViewer() {
       <div style={{ flex: 1, padding: 12 }}>
         {loading ? (
           <div style={{ padding: 16, background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb" }}>
-            Cargando documento...
+            Procesando...
           </div>
         ) : err ? (
           <div style={{ padding: 16, background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb" }}>
@@ -361,13 +399,21 @@ export default function DocumentViewer() {
               </button>
             </div>
           </div>
+        ) : intent === "download" ? (
+          <div style={{ padding: 16, background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb" }}>
+            Listo.
+          </div>
         ) : (
-          <div style={{ height: "calc(100vh - 72px - 24px)", background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden" }}>
-            <iframe
-              src={signedUrl}
-              title="Documento"
-              style={{ width: "100%", height: "100%", border: 0 }}
-            />
+          <div
+            style={{
+              height: "calc(100vh - 72px - 24px)",
+              background: "#fff",
+              borderRadius: 12,
+              border: "1px solid #e5e7eb",
+              overflow: "hidden",
+            }}
+          >
+            <iframe src={signedUrl} title="Documento" style={{ width: "100%", height: "100%", border: 0 }} />
           </div>
         )}
       </div>
@@ -410,7 +456,6 @@ export default function DocumentViewer() {
             padding: 16,
           }}
           onClick={() => {
-            // Si quieres OBLIGAR, elimina estas 2 líneas:
             setShowPwdModal(false);
             back();
           }}
@@ -427,7 +472,7 @@ export default function DocumentViewer() {
           >
             <h3 style={{ marginTop: 0 }}>🔐 Documento restringido</h3>
             <p style={{ marginTop: 6, opacity: 0.8, fontSize: 13 }}>
-              Ingresa la contraseña para visualizar el PDF.
+              Ingresa la contraseña para {intent === "download" ? "descargar" : "visualizar"} el PDF.
             </p>
 
             <input
@@ -436,7 +481,7 @@ export default function DocumentViewer() {
               value={pwdInput}
               onChange={(e) => setPwdInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") validateRestrictedPasswordAndLoad();
+                if (e.key === "Enter") validateRestrictedPasswordAndContinue();
               }}
               placeholder="Contraseña"
               style={{
@@ -466,11 +511,7 @@ export default function DocumentViewer() {
               >
                 Cancelar
               </button>
-              <button
-                className="btn btn-primary"
-                onClick={validateRestrictedPasswordAndLoad}
-                disabled={verifyingPwd}
-              >
+              <button className="btn btn-primary" onClick={validateRestrictedPasswordAndContinue} disabled={verifyingPwd}>
                 {verifyingPwd ? "Validando..." : "Aceptar"}
               </button>
             </div>
