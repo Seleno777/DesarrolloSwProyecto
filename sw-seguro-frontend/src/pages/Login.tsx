@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { AuthService } from "../services/AuthService";
@@ -18,10 +18,11 @@ export default function LoginPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [retryAfter, setRetryAfter] = useState<number | null>(null);
 
-  if (session) {
-    navigate("/", { replace: true });
-    return null;
-  }
+  useEffect(() => {
+    if (session) {
+      navigate("/", { replace: true });
+    }
+  }, [session, navigate]);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();

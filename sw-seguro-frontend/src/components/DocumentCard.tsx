@@ -57,15 +57,16 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({
   const classifInfo = getClassificationInfo(document.classification);
 
   return (
-    <div className="document-card">
+    <div className={`document-card ${isLoading ? 'loading' : ''}`}>
       {/* Encabezado */}
       <div className="card-header">
-        <h3 className="card-title" title={document.title}>
-          📄 {document.title}
-        </h3>
+        <div>
+          <h3 className="card-title" title={document.title}>
+            📄 {document.title}
+          </h3>
+        </div>
         <span
-          className="badge"
-          style={{ backgroundColor: classifInfo.color }}
+          className={`badge badge-${document.classification}`}
           title={`Clasificación: ${classifInfo.label}`}
         >
           {classifInfo.emoji} {classifInfo.label}

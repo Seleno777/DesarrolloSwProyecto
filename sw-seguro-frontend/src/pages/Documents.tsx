@@ -10,7 +10,7 @@ export default function Documents() {
   // Lee query param ?open=<uuid>
   const location = useLocation();
   const openDocId = useMemo(() => {
-    const sp = new URLSearchParams(location.search);
+    const sp = new URLSearchParams(location.search);  
     return (sp.get("open") || "").trim();
   }, [location.search]);
 
