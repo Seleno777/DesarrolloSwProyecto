@@ -121,44 +121,112 @@ export default function DocumentsPage() {
 
   // ✅ IMPORTANTE: Filtrar por grantee_id = user.id
   const loadSharedDocuments = async () => {
-    if (!user?.id) {
-      setSharedDocuments([]);
-      return;
-    }
+  if (!user?.id) {
+    setSharedDocuments([]);
+    return;
+  }
 
-    setLoadingShared(true);
-    try {
-      const { data, error } = await supabase
-        .from("document_grants")
-        .select(`
-    document_id,
-    grantee_id,
-    granted_by,
-    can_view,
-    can_download,
-    can_edit,
-    can_share,
-    created_at,
-    revoked_at,
-    granted_via_link_id,
-    documents:document_id (
-      id, title, description, classification, owner_id, created_at, updated_at
-    )
-  `)
-        .eq("grantee_id", user.id)
-        .eq("can_view", true)        // ✅ SOLO los que puede ver
-        .is("revoked_at", null)
-        .order("created_at", { ascending: false });
+  setLoadingShared(true);
+  try {
+    const nowIso = new Date().toISOString();
 
-      if (error) throw error;
-      setSharedDocuments(data || []);
-    } catch (err) {
-      console.error("Error loading shared documents:", err);
+    const { data, error } = await supabase
+      .from("document_grants")
+      .select(`
+        document_id,
+        grantee_id,
+        granted_by,
+        can_view,
+        can_download,
+        can_edit,
+        can_share,
+        created_at,
+        revoked_at,
+        granted_via_link_id,
+        expires_at,
+        documents:document_id (
+          id, title, description, classification, owner_id, created_at, updated_at
+        )
+      `)
+      .eq("grantee_id", user.id)
+      .eq("can_view", true) // ✅ SOLO los que puede ver
+      .is("revoked_at", null)
+      // ✅ NO mostrar expirados
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    setSharedDocuments(data || []);
+  } catch (err) {
+    console.error("Error loading shared documents:", err);
+    setSharedDocuments([]);
+  } finally {
+    setLoadingShared(false);
+  }
+};
+// ✅ Auto-cerrar sesión cuando caduque el grant más cercano (solo estando en shared-with-me)
+useEffect(() => {
+  if (effectiveTab !== "shared-with-me") return;
+  if (!sharedDocuments?.length) return;
+
+  // busca el expires_at más cercano (ignora null)
+  const expiries = sharedDocuments
+    .map((g: any) => g?.expires_at)
+    .filter(Boolean)
+    .map((s: string) => new Date(s).getTime())
+    .filter((t: number) => Number.isFinite(t));
+
+  if (expiries.length === 0) return;
+
+  const nextExpiry = Math.min(...expiries);
+  const ms = nextExpiry - Date.now();
+
+  if (ms <= 0) {
+    // ya expiró
+    (async () => {
+      await supabase.auth.signOut();
       setSharedDocuments([]);
-    } finally {
-      setLoadingShared(false);
-    }
+      navigate("/login", { replace: true });
+    })();
+    return;
+  }
+
+  const id = window.setTimeout(async () => {
+    await supabase.auth.signOut();
+    setSharedDocuments([]);
+    navigate("/login", { replace: true });
+  }, ms);
+
+  return () => window.clearTimeout(id);
+}, [effectiveTab, sharedDocuments, navigate]);
+
+// ✅ Auto-limpieza: esconder grants expirados mientras estás en "Compartidos Conmigo"
+useEffect(() => {
+  if (effectiveTab !== "shared-with-me") return;
+
+  const tick = () => {
+    const now = Date.now();
+
+    setSharedDocuments((prev) =>
+      (prev || []).filter((g: any) => {
+        if (!g?.expires_at) return true; // si no expira, se queda
+        const exp = new Date(g.expires_at).getTime();
+        return exp > now; // solo los que no han expirado
+      })
+    );
+
+    // Si prefieres recargar desde BD en vez de solo filtrar:
+    // loadSharedDocuments();
   };
+
+  // corre una vez al entrar
+  tick();
+
+  const id = window.setInterval(tick, 15_000);
+  return () => window.clearInterval(id);
+}, [effectiveTab]);
+
+
 
 
   // ✅ scroll/highlight si viene open=... y limpiar open= para que no se quede “pegado”
@@ -201,7 +269,7 @@ export default function DocumentsPage() {
     return () => window.clearTimeout(t4);
   }, [effectiveTab, loadingShared, openDocId, sharedDocuments, location.search, navigate]);
 
-  const handleView = async (docId: string) => {
+/*  const handleView = async (docId: string) => {
     try {
       const versions = await DocumentVersionService.listVersions(docId);
       if (!versions || versions.length === 0) {
@@ -295,7 +363,17 @@ export default function DocumentsPage() {
   };
 
 
+*/
 
+// ✅ VER (dueño) -> navega al viewer (caso B)
+const handleView = (docId: string) => {
+  navigate(`/documents/view/${docId}?mode=owner`);
+};
+
+// ✅ VER (compartido) -> navega al viewer (caso B)
+const handleViewShared = (docId: string) => {
+  navigate(`/documents/view/${docId}?mode=shared`);
+};
 
   const handleDownload = async (docId: string) => {
     try {

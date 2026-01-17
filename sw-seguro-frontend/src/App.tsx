@@ -19,10 +19,20 @@ export default function App() {
 
           {/* Share link access (public) */}
           <Route path="/share/:token" element={<ShareLinkAccess />} />
-          <Route path="/documents/view/:docId" element={<DocumentViewer />} />
-
          
-        
+
+          
+<Route
+  path="/documents/view/:docId"
+  element={
+    <ProtectedRoute>
+      <DocumentViewer />
+    </ProtectedRoute>
+  }
+/>
+
+
+
 
           {/* Protected routes */}
           <Route

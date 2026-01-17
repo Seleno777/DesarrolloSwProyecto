@@ -1,133 +1,128 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { useAuth } from "../auth/AuthProvider";
 import { DocumentVersionService } from "../services/DocumentsService";
-
-type DocRow = {
-  id: string;
-  title: string;
-  description: string | null;
-  classification: string;
-  owner_id: string;
-  created_at: string;
-  updated_at: string;
-};
-
-type GrantRow = {
-  document_id: string;
-  grantee_id: string;
-  can_view: boolean;
-  can_download: boolean;
-  can_edit: boolean;
-  can_share: boolean;
-  revoked_at: string | null;
-};
+import { useAuth } from "../auth/AuthProvider";
 
 export default function DocumentViewer() {
   const { docId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
-  const [searchParams] = useSearchParams();
 
-  const from = useMemo(() => (searchParams.get("from") || "").trim(), [searchParams]);
+  const mode = useMemo(() => {
+    const sp = new URLSearchParams(location.search);
+    return (sp.get("mode") || "shared").trim(); // "shared" | "owner"
+  }, [location.search]);
 
   const [loading, setLoading] = useState(true);
+  const [signedUrl, setSignedUrl] = useState<string>("");
   const [err, setErr] = useState<string>("");
-  const [doc, setDoc] = useState<DocRow | null>(null);
-  const [grant, setGrant] = useState<GrantRow | null>(null);
-  const [pdfUrl, setPdfUrl] = useState<string>("");
+
+  // ✅ Expiración del GRANT (modo shared)
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+
+  // ✅ Para refrescar signedUrl sin duplicar timers
+  const refreshTimerRef = useRef<number | null>(null);
+
+  const clearRefreshTimer = () => {
+    if (refreshTimerRef.current) {
+      window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+  };
+
+  // ✅ Fuerza ajuste al ancho SIN habilitar toolbars extra
+  const withPdfViewerParams = (url: string) => {
+    // zoom=page-width: ajusta al ancho
+    // toolbar=0&navpanes=0: intenta ocultar barras (algunos browsers lo ignoran)
+    return `${url}#zoom=page-width&toolbar=0&navpanes=0`;
+  };
+
+  // ✅ Genera signedUrl y programa refresh antes de que expire
+  const generateSignedUrl = async (storagePathRaw: string) => {
+    const p0 = storagePathRaw.replace(/^\/+/, "");
+    const path = p0.replace(/^documents\//, "");
+
+    // 5 minutos (más usable) y refrescamos antes de caducar
+    const TTL_SECONDS = 60 * 5;
+
+    const { data, error } = await supabase.storage
+      .from("documents")
+      .createSignedUrl(path, TTL_SECONDS);
+
+    if (error) throw error;
+    if (!data?.signedUrl) throw new Error("No se generó signedUrl.");
+
+    setSignedUrl(withPdfViewerParams(data.signedUrl));
+
+    // refresca 30s antes de expirar
+    clearRefreshTimer();
+    refreshTimerRef.current = window.setTimeout(() => {
+      // re-intenta refrescar (silencioso)
+      generateSignedUrl(storagePathRaw).catch(() => {});
+    }, Math.max(5_000, (TTL_SECONDS - 30) * 1000));
+  };
 
   useEffect(() => {
-    let revokeUrl: string | null = null;
-
     const run = async () => {
       try {
-        setErr("");
         setLoading(true);
+        setErr("");
+        setSignedUrl("");
+        setExpiresAt(null);
+        clearRefreshTimer();
 
-        if (!user?.id) {
-          setErr("No autenticado");
-          return;
-        }
-        if (!docId) {
-          setErr("Documento inválido");
-          return;
-        }
+        if (!docId) throw new Error("docId inválido");
+        if (!user?.id) throw new Error("No autenticado");
 
-        // 1) Traer doc (RLS ya permite owner o granted)
-        const { data: docData, error: docErr } = await supabase
-          .from("documents")
-          .select("id,title,description,classification,owner_id,created_at,updated_at")
-          .eq("id", docId)
-          .single();
-
-        if (docErr) throw docErr;
-        setDoc(docData as DocRow);
-
-        // 2) Traer grant (si no soy owner)
-        if (docData.owner_id !== user.id) {
-          const { data: gData, error: gErr } = await supabase
+        // ✅ Validación de permisos
+        if (mode === "shared") {
+          const { data: grant, error: gErr } = await supabase
             .from("document_grants")
-            .select("document_id,grantee_id,can_view,can_download,can_edit,can_share,revoked_at")
+            .select("document_id, grantee_id, can_view, revoked_at, expires_at")
             .eq("document_id", docId)
             .eq("grantee_id", user.id)
-            .is("revoked_at", null)
             .maybeSingle();
 
           if (gErr) throw gErr;
+          if (!grant) throw new Error("No tienes acceso a este documento.");
+          if (!grant.can_view) throw new Error("No tienes permiso de ver.");
+          if (grant.revoked_at) throw new Error("Acceso revocado.");
 
-          if (!gData || !gData.can_view) {
-            setErr("No tienes permiso para ver este documento.");
-            return;
+          if (grant.expires_at && new Date(grant.expires_at).getTime() <= Date.now()) {
+            throw new Error("Acceso expirado.");
           }
-          setGrant(gData as GrantRow);
+
+          setExpiresAt(grant.expires_at || null);
         } else {
-          // owner: todos los permisos implícitos
-          setGrant({
-            document_id: docId,
-            grantee_id: user.id,
-            can_view: true,
-            can_download: true,
-            can_edit: true,
-            can_share: true,
-            revoked_at: null,
-          });
+          // ✅ modo owner: confirma que el doc es mío
+          const { data: doc, error: dErr } = await supabase
+            .from("documents")
+            .select("id, owner_id")
+            .eq("id", docId)
+            .maybeSingle();
+
+          if (dErr) throw dErr;
+          if (!doc) throw new Error("Documento no existe.");
+          if (doc.owner_id !== user.id) throw new Error("No eres el dueño de este documento.");
         }
 
-        // 3) Descargar última versión PDF y mostrarla
+        // ✅ Obtener última versión
         const versions = await DocumentVersionService.listVersions(docId);
         if (!versions || versions.length === 0) {
-          setErr("Este documento no tiene archivo PDF cargado.");
-          return;
+          throw new Error("No hay archivo para ver.");
         }
 
         const latest = versions[0];
-        const storagePathRaw: string = latest.storage_path || latest.storagePath;
+        const storagePathRaw: string =
+          latest.storage_path || latest.storagePath || latest.storagePathRaw || "";
 
-        if (!storagePathRaw) {
-          setErr("No existe storage_path para este PDF.");
-          return;
-        }
+        if (!storagePathRaw) throw new Error("No hay storage_path.");
 
-        // tu bucket es "documents" y normalmente guardas como "documents/<...>"
-        const storagePath = storagePathRaw.replace(/^documents\//, "");
-
-        const { data: fileBlob, error: dlErr } = await supabase.storage
-          .from("documents")
-          .download(storagePath);
-
-        if (dlErr) throw dlErr;
-        if (!fileBlob) {
-          setErr("No se recibió archivo desde Storage.");
-          return;
-        }
-
-        const url = URL.createObjectURL(fileBlob);
-        revokeUrl = url;
-        setPdfUrl(url);
+        await generateSignedUrl(storagePathRaw);
       } catch (e: any) {
-        setErr(e?.message || "Error al cargar el documento");
+        setErr(e?.message || "Error desconocido");
       } finally {
         setLoading(false);
       }
@@ -136,101 +131,70 @@ export default function DocumentViewer() {
     run();
 
     return () => {
-      if (revokeUrl) URL.revokeObjectURL(revokeUrl);
+      clearRefreshTimer();
     };
-  }, [docId, user?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId, user?.id, mode]);
 
-  const canDownload = !!grant?.can_download;
+  // ✅ auto-kick cuando expire (solo modo shared)
+  useEffect(() => {
+    if (mode !== "shared") return;
+    if (!expiresAt) return;
 
-  const handleDownload = async () => {
-    if (!docId) return;
-    if (!canDownload) {
-      alert("No tienes permiso para descargar.");
+    const expMs = new Date(expiresAt).getTime();
+    const msLeft = expMs - Date.now();
+
+    const kick = async () => {
+      await supabase.auth.signOut();
+      navigate("/login?reason=share_expired", { replace: true });
+    };
+
+    if (msLeft <= 0) {
+      kick();
       return;
     }
-    // Reutiliza tu download actual (si quieres) pero aquí lo hacemos simple:
-    try {
-      const versions = await DocumentVersionService.listVersions(docId);
-      if (!versions || versions.length === 0) {
-        alert("❌ No hay archivo para descargar");
-        return;
-      }
-      const latest = versions[0];
-      const storagePathRaw: string = latest.storage_path || latest.storagePath;
-      const storagePath = storagePathRaw.replace(/^documents\//, "");
 
-      const { data, error } = await supabase.storage.from("documents").download(storagePath);
-      if (error) throw new Error(error.message);
-      if (!data) throw new Error("No se recibió el archivo");
+    const t = window.setTimeout(kick, msLeft);
+    return () => window.clearTimeout(t);
+  }, [expiresAt, mode, navigate]);
 
-      const url = window.URL.createObjectURL(data);
-      const a = document.createElement("a");
-      a.href = url;
-
-      const fileName =
-        latest.filename ||
-        latest.file_name ||
-        latest.original_filename ||
-        storagePath.split("/").pop() ||
-        "documento.pdf";
-
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (e: any) {
-      alert("❌ Error al descargar: " + (e?.message || "Error desconocido"));
-    }
-  };
-
-  const goBack = () => {
-    if (from === "shared") {
+  const back = () => {
+    if (mode === "owner") {
+      navigate("/documents?tab=my-documents", { replace: true });
+    } else {
       navigate("/documents?tab=shared-with-me", { replace: true });
-      return;
     }
-    navigate("/documents?tab=my-documents", { replace: true });
   };
 
   return (
-    <div className="documents-container">
-      <header className="documents-header">
-        <div className="header-left">
-          <h1>👁️ Visor de Documento</h1>
-          <p className="header-subtitle">{doc?.title || "Documento"}</p>
-        </div>
-        <div className="header-right" style={{ display: "flex", gap: 8 }}>
-          <button onClick={goBack} className="btn btn-secondary">
-            ⬅️ Volver
-          </button>
-          {canDownload && (
-            <button onClick={handleDownload} className="btn btn-primary">
-              ⬇️ Descargar
-            </button>
-          )}
-        </div>
-      </header>
+    <div style={{ height: "100vh", width: "100vw", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: 12, borderBottom: "1px solid #eee", display: "flex", gap: 8 }}>
+        <button className="btn btn-secondary" onClick={back}>
+          ← Volver
+        </button>
+
+        {mode === "shared" && expiresAt && (
+          <span style={{ marginLeft: "auto", opacity: 0.7 }}>
+            Expira: {new Date(expiresAt).toLocaleString("es-ES")}
+          </span>
+        )}
+      </div>
 
       {loading ? (
-        <div className="loading-spinner">
-          <div className="spinner"></div>
-          <p>Cargando documento...</p>
-        </div>
+        <div style={{ padding: 16 }}>Cargando...</div>
       ) : err ? (
-        <div className="alert alert-error">⚠️ {err}</div>
-      ) : pdfUrl ? (
-        <div style={{ height: "calc(100vh - 180px)", borderRadius: 12, overflow: "hidden" }}>
-          <iframe
-            title="PDF Viewer"
-            src={pdfUrl}
-            style={{ width: "100%", height: "100%", border: "none" }}
-          />
+        <div style={{ padding: 16 }}>
+          <p>❌ {err}</p>
+          <button className="btn btn-primary" onClick={back}>
+            Volver
+          </button>
         </div>
       ) : (
-        <div className="empty-state">
-          <div className="empty-icon">📄</div>
-          <h3>No hay PDF para mostrar</h3>
-        </div>
+        <iframe
+          src={signedUrl}
+          title="Documento"
+          style={{ flex: 1, width: "100%", height: "100%", border: 0 }}
+        />
       )}
     </div>
   );
