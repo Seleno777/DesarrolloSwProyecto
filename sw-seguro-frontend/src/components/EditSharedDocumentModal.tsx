@@ -1,5 +1,6 @@
 import React from "react";
 import { FileUploadComponent } from "./FileUploadComponent";
+import { useToast } from "../hooks/useToast";
 
 type Props = {
   isOpen: boolean;
@@ -24,6 +25,7 @@ export default function EditSharedDocumentModal({
   onUploadOk,
   onUploadFail,
 }: Props) {
+  const toast = useToast();
   if (!isOpen) return null;
 
   const classificationLabel: Record<string, string> = {

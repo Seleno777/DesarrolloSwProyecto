@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { DocumentGrantService } from "../services/DocumentsService";
+import { useToast } from "../hooks/useToast";
 
 interface ShareDocumentModalProps {
   documentId: string;
@@ -16,6 +17,7 @@ export function ShareDocumentModal({
   onSuccess,
   isOpen,
 }: ShareDocumentModalProps) {
+  const toast = useToast();
   const [email, setEmail] = useState("");
   const [canView, setCanView] = useState(true);
   const [canDownload, setCanDownload] = useState(true);
@@ -37,17 +39,17 @@ export function ShareDocumentModal({
     setSuccess(false);
 
     if (!email.trim()) {
-      setError("Por favor ingresa un email");
+      setError("Ingresa un email para compartir el documento");
       return;
     }
 
     if (!isValidEmail(email)) {
-      setError("Por favor ingresa un email válido");
+      setError("El email no es válido");
       return;
     }
 
     if (!canView && !canDownload && !canEdit && !canShare) {
-      setError("Debes seleccionar al menos un permiso");
+      setError("Selecciona al menos un permiso para otorgar");
       return;
     }
 
@@ -77,7 +79,7 @@ export function ShareDocumentModal({
         onClose();
       }, 2000);
     } catch (err: any) {
-      setError(err?.message || "Error al compartir documento");
+      setError(err?.message || "Error al otorgar acceso al documento");
     } finally {
       setLoading(false);
     }
@@ -141,7 +143,7 @@ export function ShareDocumentModal({
               borderLeft: "4px solid #22c55e",
             }}
           >
-            ✅ Acceso concedido exitosamente
+            ✅ Acceso concedido correctamente
           </div>
         )}
 

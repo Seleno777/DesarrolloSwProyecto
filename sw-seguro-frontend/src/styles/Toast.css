@@ -1,0 +1,229 @@
+/* ==================== TOAST CONTAINER ==================== */
+.toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 10000;
+  pointer-events: none;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ==================== TOAST ITEM ==================== */
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: slideInRight 0.3s ease-out, slideOutRight 0.3s ease-in 3.7s forwards;
+  pointer-events: all;
+  max-width: 380px;
+  word-wrap: break-word;
+  backdrop-filter: blur(4px);
+}
+
+/* ==================== TOAST TYPES ==================== */
+
+/* Success Toast */
+.toast-success {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  border-left: 4px solid #047857;
+}
+
+.toast-success .toast-icon {
+  color: #dcfce7;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Error Toast */
+.toast-error {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  border-left: 4px solid #b91c1c;
+}
+
+.toast-error .toast-icon {
+  color: #fee2e2;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Warning Toast */
+.toast-warning {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+  border-left: 4px solid #b45309;
+}
+
+.toast-warning .toast-icon {
+  color: #fef3c7;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Info Toast */
+.toast-info {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+  border-left: 4px solid #1d4ed8;
+}
+
+.toast-info .toast-icon {
+  color: #dbeafe;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ==================== TOAST ELEMENTS ==================== */
+
+.toast-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 18px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.toast-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toast-message {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.toast-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+}
+
+.toast-close:active {
+  transform: scale(0.95);
+}
+
+/* ==================== ANIMATIONS ==================== */
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(384px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes slideOutRight {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(384px) scale(0.95);
+  }
+}
+
+/* ==================== RESPONSIVE ==================== */
+
+@media (max-width: 640px) {
+  .toast-container {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    max-width: none;
+  }
+
+  .toast {
+    max-width: none;
+    animation: slideInUp 0.3s ease-out, slideOutDown 0.3s ease-in 3.7s forwards;
+  }
+
+  @keyframes slideInUp {
+    from {
+      opacity: 0;
+      transform: translateY(100px) scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes slideOutDown {
+    from {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(100px) scale(0.95);
+    }
+  }
+}
+
+/* ==================== ACCESSIBILITY ==================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+    opacity: 1;
+  }
+
+  .toast-close:hover {
+    transform: none;
+  }
+
+  .toast-close:active {
+    transform: none;
+  }
+}
+
+/* ==================== STACKING ==================== */
+
+.toast:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.toast:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+.toast:nth-child(4) {
+  animation-delay: 0.3s;
+}
+
+.toast:nth-child(5) {
+  animation-delay: 0.4s;
+}

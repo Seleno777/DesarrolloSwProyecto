@@ -41,7 +41,7 @@ export function useDocuments() {
 
       setDocuments((data || []) as DocumentRow[]);
     } catch (e: any) {
-      setError(e?.message || "Error cargando documentos");
+      setError(e?.message || "Error al cargar tus documentos");
       setDocuments([]);
     } finally {
       setLoading(false);
@@ -89,7 +89,7 @@ export function useCreateDocument() {
         if (err) throw err;
         return data;
       } catch (e: any) {
-        setError(e?.message || "Error creando documento");
+        setError(e?.message || "Error al crear el documento");
         throw e;
       } finally {
         setLoading(false);

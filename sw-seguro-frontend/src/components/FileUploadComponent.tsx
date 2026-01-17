@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import { DocumentVersionService } from "../services/DocumentsService";
 import { supabase } from "../lib/supabase";
+import { useToast } from "../hooks/useToast";
 
 // ✅ Watermark (pdf-lib)
 import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
@@ -59,6 +60,7 @@ export function FileUploadComponent({
   classification = "private",
   watermarkText = "CONFIDENCIAL",
 }: FileUploadProps) {
+  const toast = useToast();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);

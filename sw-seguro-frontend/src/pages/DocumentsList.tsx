@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { useDocuments, useCreateDocument } from "../hooks/useDocuments";
+import { useToast } from "../hooks/useToast";
 import { DocumentVersionService } from "../services/DocumentsService";
 import { FileUploadComponent } from "../components/FileUploadComponent";
 import ShareLinkModal from "../components/ShareLinkModal";
@@ -70,6 +71,7 @@ export default function DocumentsPage() {
   const { documents, loading, error, refetch } = useDocuments();
   const { create: createDoc, loading: creating, error: createError } =
     useCreateDocument();
+  const toast = useToast();
 
   // ✅ URL params
   const location = useLocation();
@@ -296,7 +298,7 @@ export default function DocumentsPage() {
       setSelectedLinkId("");
       setRecipients([]);
     } catch (e: any) {
-      alert("❌ No se pudo revocar el link: " + (e?.message || "Error"));
+      toast.error(e?.message || "Error al revocar el enlace");
     }
   };
 
@@ -313,7 +315,7 @@ export default function DocumentsPage() {
 
       await loadRecipients(selectedLinkId);
     } catch (e: any) {
-      alert("❌ No se pudo revocar el recipient: " + (e?.message || "Error"));
+      toast.error(e?.message || "Error al revocar el acceso");
     }
   };
 
@@ -379,7 +381,7 @@ export default function DocumentsPage() {
       // refrescar list (para que trigger de public link aparezca)
       refetch();
     } catch (err: any) {
-      alert("❌ Error creando documento: " + (err?.message || "Error desconocido"));
+      toast.error(err?.message || "Error al crear el documento");
     }
   };
 
@@ -585,7 +587,7 @@ export default function DocumentsPage() {
 
       const versions = await DocumentVersionService.listVersions(docId);
       if (!versions || versions.length === 0) {
-        alert("❌ No hay archivo para descargar");
+        toast.error("El documento no tiene archivos para descargar. Intenta subir una versión primero.");
         return;
       }
 
@@ -594,7 +596,7 @@ export default function DocumentsPage() {
         latestVersion.storage_path || latestVersion.storagePath;
 
       if (!storagePathRaw || typeof storagePathRaw !== "string") {
-        alert("❌ No hay ruta de archivo (storage_path) para descargar");
+        toast.error("Error: No se encontró la ruta del archivo. Intenta de nuevo más tarde.");
         return;
       }
 
@@ -624,7 +626,7 @@ export default function DocumentsPage() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert("❌ Error al descargar: " + (err?.message || "Error desconocido"));
+      toast.error(err?.message || "Error al descargar el documento");
     }
   };
 
@@ -1037,7 +1039,7 @@ export default function DocumentsPage() {
                                 navigator.clipboard.writeText(
                                   `${window.location.origin}/public/${publicTokens[doc.id]}`
                                 );
-                                alert("✅ Link público copiado");
+                                toast.success("Enlace público copiado al portapapeles");
                               }}
                             >
                               📋 Copiar
@@ -1063,10 +1065,10 @@ export default function DocumentsPage() {
                       classification={doc.classification}
                       watermarkText={`CONFIDENCIAL · ${user?.email || ""}`}
                       onUploadSuccess={() => {
-                        alert("✅ Archivo subido exitosamente");
+                        toast.success("Archivo subido correctamente");
                         refetch();
                       }}
-                      onUploadError={(err) => alert("❌ Error: " + err)}
+                      onUploadError={(err) => toast.error(`Error al subir el archivo: ${err}`)}
                     />
                   </div>
                 ))}
@@ -1266,7 +1268,7 @@ export default function DocumentsPage() {
                     const doc = (documents as any[]).find((d: any) => d.id === manageDocId);
                     if (!doc) return;
                     if (doc.classification === "restricted") {
-                      alert("⛔ Restringido no se puede compartir.");
+                      toast.warning("Los documentos restringidos no se pueden compartir");
                       return;
                     }
                     handleShareClick(doc.id, doc.title);
@@ -1502,12 +1504,12 @@ export default function DocumentsPage() {
         classification={(editSharedCtx?.classification || "private") as any}
         watermarkText={`CONFIDENCIAL · ${user?.email || ""}`}
         onUploadOk={() => {
-          alert("✅ Versión subida correctamente");
+          toast.success("Nueva versión subida correctamente");
           setShowEditSharedModal(false);
           setEditSharedCtx(null);
           loadSharedDocuments();
         }}
-        onUploadFail={(msg) => alert("❌ Error al subir: " + msg)}
+        onUploadFail={(msg) => toast.error(`Error al subir la versión: ${msg}`)}
       />
     </div>
   );

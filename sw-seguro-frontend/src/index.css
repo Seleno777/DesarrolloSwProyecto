@@ -30,7 +30,7 @@ body {
   display: flex;
   place-items: center;
   min-width: 320px;
-  overflow: hidden; /* Evita scroll no deseado */
+  overflow: auto; /* Evita scroll no deseado */
 }
 
 /* Si tienes un contenedor principal como #app o #root */

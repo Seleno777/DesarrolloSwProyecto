@@ -23,7 +23,7 @@ export class AuthService {
       });
 
       if (error || !data.session) {
-        throw new AuthenticationError("Invalid email or password");
+        throw new AuthenticationError("Email o contraseña incorrectos");
       }
 
       return data;
@@ -44,9 +44,9 @@ export class AuthService {
 
       if (error) {
         if (error.message.includes("already registered")) {
-          throw new ApiError("ALREADY_REGISTERED", 409, "Email is already registered");
+          throw new ApiError("ALREADY_REGISTERED", 409, "Este email ya está registrado");
         }
-        throw new ApiError("SIGNUP_FAILED", 500, "Failed to create account");
+        throw new ApiError("SIGNUP_FAILED", 500, "No se pudo crear la cuenta");
       }
 
       return data;
@@ -87,7 +87,7 @@ export class AuthService {
 
     const { error } = await supabase.auth.resetPasswordForEmail(validated.email);
     if (error) {
-      throw new ApiError("RESET_PASSWORD_FAILED", 500, "Failed to send password reset email");
+      throw new ApiError("RESET_PASSWORD_FAILED", 500, "No se pudo enviar el enlace de recuperación");
     }
   }
 
@@ -97,7 +97,7 @@ export class AuthService {
   static async updateUser(updates: { email?: string; password?: string }) {
     const { error } = await supabase.auth.updateUser(updates);
     if (error) {
-      throw new ApiError("UPDATE_USER_FAILED", 500, "Failed to update user");
+      throw new ApiError("UPDATE_USER_FAILED", 500, "No se pudo actualizar tu perfil");
     }
   }
 }

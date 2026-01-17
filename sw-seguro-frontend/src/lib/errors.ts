@@ -42,7 +42,7 @@ export class ValidationError extends AppError {
 }
 
 export class AuthenticationError extends AppError {
-  constructor(message: string = "Authentication required") {
+  constructor(message: string = "Debes iniciar sesión para continuar") {
     super("AUTHENTICATION_ERROR", 401, message);
     this.name = "AuthenticationError";
     Object.setPrototypeOf(this, AuthenticationError.prototype);
@@ -50,7 +50,7 @@ export class AuthenticationError extends AppError {
 }
 
 export class AuthorizationError extends AppError {
-  constructor(message: string = "You don't have permission to perform this action") {
+  constructor(message: string = "No tienes permiso para realizar esta acción") {
     super("AUTHORIZATION_ERROR", 403, message);
     this.name = "AuthorizationError";
     Object.setPrototypeOf(this, AuthorizationError.prototype);
@@ -58,8 +58,8 @@ export class AuthorizationError extends AppError {
 }
 
 export class NotFoundError extends AppError {
-  constructor(resource: string = "Resource") {
-    super("NOT_FOUND", 404, `${resource} not found`);
+  constructor(resource: string = "Recurso") {
+    super("NOT_FOUND", 404, `${resource} no encontrado`);
     this.name = "NotFoundError";
     Object.setPrototypeOf(this, NotFoundError.prototype);
   }
@@ -74,7 +74,7 @@ export class ConflictError extends AppError {
 }
 
 export class InternalServerError extends AppError {
-  constructor(message: string = "An unexpected error occurred") {
+  constructor(message: string = "Ocurrió un error inesperado") {
     super("INTERNAL_SERVER_ERROR", 500, message);
     this.name = "InternalServerError";
     Object.setPrototypeOf(this, InternalServerError.prototype);
@@ -99,14 +99,14 @@ export function handleError(error: unknown): ErrorResponse {
     const isDev = typeof import.meta !== "undefined" && import.meta.env?.DEV;
     return {
       code: "UNKNOWN_ERROR",
-      message: isDev ? error.message : "An unexpected error occurred",
+      message: isDev ? error.message : "Ocurrió un error inesperado",
       timestamp: new Date().toISOString(),
     };
   }
 
   return {
     code: "UNKNOWN_ERROR",
-    message: "An unexpected error occurred",
+    message: "Ocurrió un error inesperado",
     timestamp: new Date().toISOString(),
   };
 }
@@ -121,10 +121,10 @@ export function getUserErrorMessage(error: unknown): string {
 
   if (error instanceof Error) {
     const isDev = typeof import.meta !== "undefined" && import.meta.env?.DEV;
-    return isDev ? error.message : "An unexpected error occurred";
+    return isDev ? error.message : "Ocurrió un error inesperado";
   }
 
-  return "An unexpected error occurred";
+  return "Ocurrió un error inesperado";
 }
 
 /**

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import type { DocumentRow } from "../types/models";
 import "../styles/ShareAccessModal.css";
 import { ShareLinksService } from "../services/ShareLinksService";
+import { useToast } from "../hooks/useToast";
 
 interface ShareAccessModalProps {
   document: DocumentRow;
@@ -14,6 +15,7 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
   onClose,
   isLoading = false,
 }) => {
+  const toast = useToast();
   const [email, setEmail] = useState("");
   const [permissions, setPermissions] = useState({
     can_view: true,
@@ -50,11 +52,11 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
     const emailTrim = email.trim().toLowerCase();
 
     if (!emailTrim) {
-      setError("Ingresa un email");
+      setError("Ingresa un email para crear el enlace de acceso");
       return;
     }
     if (!isValidEmail(emailTrim)) {
-      setError("Email inválido");
+      setError("El email no es válido");
       return;
     }
     if (
@@ -63,7 +65,7 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
       !permissions.can_edit &&
       !permissions.can_share
     ) {
-      setError("Debe otorgar al menos un permiso");
+      setError("Selecciona al menos un permiso para otorgar");
       return;
     }
 
@@ -96,15 +98,15 @@ export const ShareAccessModal: React.FC<ShareAccessModalProps> = ({
       // 4) Copiar al clipboard (si falla, igual mostramos el url)
       try {
         await navigator.clipboard.writeText(url);
-        setSuccess("✅ Link creado y copiado al portapapeles");
+        setSuccess("Enlace copiado al portapapeles");
       } catch {
-        setSuccess("✅ Link creado. Copia el enlace manualmente.");
+        setSuccess("Enlace creado. Cópialo manualmente.");
       }
 
       // Limpieza opcional
       setEmail("");
     } catch (err: any) {
-      setError(err?.message || "Error al crear link de acceso");
+      setError(err?.message || "Error al crear el enlace de acceso");
     } finally {
       setCreating(false);
     }

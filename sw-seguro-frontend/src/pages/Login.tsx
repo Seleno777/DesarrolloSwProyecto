@@ -3,12 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { AuthService } from "../services/AuthService";
 import { getUserErrorMessage, isRateLimitError } from "../lib/errors";
+import { useToast } from "../hooks/useToast";
 
 type AuthMode = "signin" | "signup" | "reset";
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const toast = useToast();
   const [mode, setMode] = useState<AuthMode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -57,7 +59,7 @@ export default function LoginPage() {
     setRetryAfter(null);
 
     if (password !== confirmPassword) {
-      setError("Las contraseñas no coinciden");
+      setError("Las contraseñas no coinciden. Intenta de nuevo.");
       setLoading(false);
       return;
     }
@@ -74,7 +76,7 @@ export default function LoginPage() {
         password,
         confirmPassword,
       });
-      setSuccess("¡Cuenta creada exitosamente! Redirigiendo...");
+      setSuccess("¡Cuenta creada correctamente! Redirigiendo...");
       setTimeout(() => navigate("/", { replace: true }), 2000);
     } catch (err) {
       const message = getUserErrorMessage(err);
@@ -96,7 +98,7 @@ export default function LoginPage() {
 
     try {
       await AuthService.resetPasswordForEmail(email.trim());
-      setSuccess("Se envió un enlace de recuperación a tu email");
+      setSuccess("Se envió un enlace de recuperación a tu correo");
       setEmail("");
     } catch (err) {
       const message = getUserErrorMessage(err);

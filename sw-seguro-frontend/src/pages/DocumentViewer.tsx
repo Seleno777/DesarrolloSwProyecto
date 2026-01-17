@@ -4,6 +4,7 @@ import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { DocumentVersionService } from "../services/DocumentsService";
 import { useAuth } from "../auth/AuthProvider";
+import { useToast } from "../hooks/useToast";
 
 type DocRow = {
   id: string;
@@ -27,6 +28,7 @@ export default function DocumentViewer() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, signOut } = useAuth();
+  const toastNotify = useToast();
 
   const mode = useMemo(() => {
     const sp = new URLSearchParams(location.search);
@@ -104,7 +106,7 @@ export default function DocumentViewer() {
 
   const getLatestStoragePath = async (docId: string) => {
     const versions = await DocumentVersionService.listVersions(docId);
-    if (!versions || versions.length === 0) throw new Error("No hay archivo.");
+    if (!versions || versions.length === 0) throw new Error("El documento no tiene archivos.");
 
     const latest = versions[0];
     const storagePathRaw: string = latest.storage_path || latest.storagePath || latest.storagePathRaw || "";
@@ -192,22 +194,22 @@ export default function DocumentViewer() {
         if (myRunId !== runIdRef.current) return;
         if (gErr) throw gErr;
         if (!grant) throw new Error("No tienes acceso a este documento.");
-        if (!grant.can_view) throw new Error("No tienes permiso para ver.");
-        if (grant.revoked_at) throw new Error("Acceso revocado.");
+        if (!grant.can_view) throw new Error("No tienes permiso para ver este documento.");
+        if (grant.revoked_at) throw new Error("El acceso a este documento ha sido revocado.");
         if (grant.expires_at && new Date(grant.expires_at).getTime() <= Date.now()) {
-          throw new Error("Acceso expirado.");
+          throw new Error("El acceso a este documento ha expirado.");
         }
 
         // ✅ Si intent=download, exigir permiso de descarga
         if (intent === "download" && !grant.can_download) {
-          throw new Error("No tienes permiso para descargar.");
+          throw new Error("No tienes permiso para descargar este documento.");
         }
 
         setGrantInfo(grant as GrantRow);
         setExpiresAt(grant.expires_at || null);
       } else {
         // owner
-        if (doc.owner_id !== user.id) throw new Error("No eres el dueño de este documento.");
+        if (doc.owner_id !== user.id) throw new Error("Solo el propietario puede acceder a este documento.");
 
         // restricted => pedir password por modal
         if (doc.classification === "restricted") {
@@ -220,7 +222,7 @@ export default function DocumentViewer() {
       // 3) intent: download o view
       if (intent === "download") {
         await downloadLatest(docId);
-        showToast("success", "✅ Descarga iniciada");
+        showToast("success", "Descarga iniciada");
         back();
         return;
       }
@@ -237,7 +239,7 @@ export default function DocumentViewer() {
     if (!docId) return;
 
     if (!pwdInput) {
-      setPwdErr("Ingresa la contraseña.");
+      setPwdErr("Ingresa la contraseña para continuar.");
       return;
     }
 
@@ -262,15 +264,15 @@ export default function DocumentViewer() {
       // Si venías por download, descarga; si no, muestra PDF
       if (intent === "download") {
         await downloadLatest(docId);
-        showToast("success", "✅ Descarga iniciada");
+        showToast("success", "Descarga iniciada");
         back();
         return;
       }
 
       await loadLatestAndSign(docId);
-      showToast("success", "Acceso concedido al documento restringido.");
+      showToast("success", "Acceso al documento restringido concedido.");
     } catch (e: any) {
-      setErr(e?.message || "Error verificando contraseña");
+      setErr(e?.message || "Error al verificar la contraseña");
     } finally {
       setVerifyingPwd(false);
       setLoading(false);
