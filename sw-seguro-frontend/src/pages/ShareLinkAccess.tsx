@@ -56,7 +56,7 @@ export default function ShareLinkAccess() {
       if (expectedEmail) {
         if (loggedEmail !== expectedEmail) {
           setMsg(
-            `⚠️ Estás logueado como ${loggedEmail}, pero el enlace fue solicitado para ${expectedEmail}.\nCierra sesión e inicia con el correo correcto.`
+            `⚠️ El correo actual no coincide con el que se requiere para acceder.\nCierra sesión e inicia con el correo correcto.`
           );
           return;
         }
@@ -67,7 +67,7 @@ export default function ShareLinkAccess() {
       // Si NO hay expectedEmail, no activamos automático.
       // Permitimos que el usuario escriba su email y lo confirme manualmente.
       setMsg(
-        `Estás logueado como ${loggedEmail}. Escribe tu correo y presiona "Validar acceso" para continuar.`
+        `Verifica tu identidad. Ingresa tu correo y presiona "Validar acceso" para continuar.`
       );
     };
 
@@ -96,7 +96,7 @@ export default function ShareLinkAccess() {
 
     if (loggedEmail !== emailTrim) {
       setMsg(
-        `⚠️ Estás logueado como ${loggedEmail} pero escribiste ${emailTrim}.\nCierra sesión o escribe el correo correcto.`
+        `⚠️ El correo ingresado no coincide con el correo actual.\nCierra sesión o ingresa el correo correcto.`
       );
       return;
     }

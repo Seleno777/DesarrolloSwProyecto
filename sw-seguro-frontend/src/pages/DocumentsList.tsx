@@ -344,7 +344,7 @@ export default function DocumentsPage() {
           .maybeSingle();
 
         if (dErr || !docRow?.id) {
-          throw dErr || new Error("No se pudo ubicar el documento creado");
+          throw dErr || new Error("No se pudo completar la operación");
         }
 
         const pwd = generateStrongPassword(16);
@@ -354,7 +354,7 @@ export default function DocumentsPage() {
           p_password: pwd,
         });
 
-        if (pErr) throw pErr;
+        if (pErr) throw new Error("No se pudo completar la operación");
 
         // ✅ mostrar modal + copiar
         setRestrictedPwd(pwd);
@@ -367,7 +367,7 @@ export default function DocumentsPage() {
           setRestrictedCopied(true);
         } catch {
           setRestrictedCopyErr(
-            "No se pudo copiar automáticamente. Usa el botón Copiar."
+            "No se pudo copiar automáticamente. Copia manualmente el código."
           );
         }
       }
@@ -381,7 +381,7 @@ export default function DocumentsPage() {
       // refrescar list (para que trigger de public link aparezca)
       refetch();
     } catch (err: any) {
-      toast.error(err?.message || "Error al crear el documento");
+      toast.error("No se pudo crear el documento. Intenta nuevamente.");
     }
   };
 
@@ -712,18 +712,7 @@ export default function DocumentsPage() {
         >
           🔐 Gestionar Accesos
         </button>
-        <button
-          onClick={() => goTab("audit-log")}
-          className={`tab-button ${effectiveTab === "audit-log" ? "active" : ""}`}
-        >
-          📋 Historial de Auditoría
-        </button>
-        <button
-          onClick={() => goTab("settings")}
-          className={`tab-button ${effectiveTab === "settings" ? "active" : ""}`}
-        >
-          ⚙️ Configuración
-        </button>
+
       </nav>
 
       {/* Errors */}
@@ -1475,21 +1464,7 @@ export default function DocumentsPage() {
           </div>
         )}
 
-        {/* Audit Log */}
-        {effectiveTab === "audit-log" && (
-          <div className="section-audit">
-            <h2>📋 Historial de Auditoría</h2>
-            <p>(Pendiente de implementar)</p>
-          </div>
-        )}
 
-        {/* Settings */}
-        {effectiveTab === "settings" && (
-          <div className="section-settings">
-            <h2>⚙️ Configuración</h2>
-            <p>(Pendiente de implementar)</p>
-          </div>
-        )}
       </div>
 
       {/* ✅ MODAL EDITAR SHARED (subir nueva versión) */}

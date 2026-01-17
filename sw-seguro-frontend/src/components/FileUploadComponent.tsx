@@ -147,7 +147,7 @@ export function FileUploadComponent({
 
       if (uploadError) {
         console.error("Storage upload error:", uploadError);
-        throw new Error(`Error en Storage: ${uploadError.message}`);
+        throw new Error("No se pudo guardar el documento. Intenta nuevamente.");
       }
 
       setUploadProgress(70);

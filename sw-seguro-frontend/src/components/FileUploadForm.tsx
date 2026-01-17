@@ -1,5 +1,10 @@
 import React, { useState, useRef } from "react";
 import type { DocumentRow, Classification } from "../types/models";
+import {
+  validateFileSecurely,
+  validateDocumentText,
+  normalizeFilename,
+} from "../lib/fileNormalizer";
 import "../styles/FileUploadForm.css";
 
 interface FileUploadFormProps {
@@ -25,19 +30,9 @@ export const FileUploadForm: React.FC<FileUploadFormProps> = ({
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Validar archivo seleccionado
+  // Validar archivo seleccionado usando funciones seguras
   const validateFile = (file: File): string | null => {
-    if (file.type !== "application/pdf") {
-      return "Solo se permiten archivos PDF";
-    }
-    if (file.size > 50 * 1024 * 1024) {
-      // 50MB
-      return "El archivo no puede exceder 50 MB";
-    }
-    if (file.size === 0) {
-      return "El archivo está vacío";
-    }
-    return null;
+    return validateFileSecurely(file, 50);
   };
 
   // Manejar selección de archivo
@@ -65,19 +60,23 @@ export const FileUploadForm: React.FC<FileUploadFormProps> = ({
     setError(null);
     setSuccess(null);
 
-    // Validaciones
-    if (!title.trim()) {
-      setError("El título es obligatorio");
+    // Validar título
+    const titleError = validateDocumentText(title, 255, "Título");
+    if (titleError) {
+      setError(titleError);
       return;
     }
-    if (title.length > 255) {
-      setError("El título no puede exceder 255 caracteres");
-      return;
+
+    // Validar descripción (si existe)
+    if (description.trim()) {
+      const descError = validateDocumentText(description, 1000, "Descripción");
+      if (descError) {
+        setError(descError);
+        return;
+      }
     }
-    if (description.length > 1000) {
-      setError("La descripción no puede exceder 1000 caracteres");
-      return;
-    }
+
+    // Validar archivo
     if (!selectedFile) {
       setError("Debe seleccionar un archivo PDF");
       return;
@@ -93,12 +92,19 @@ export const FileUploadForm: React.FC<FileUploadFormProps> = ({
         });
       }, 100);
 
-      // Llamar función de upload
+      // Crear archivo normalizado con nombre seguro
+      const normalizedName = normalizeFilename(selectedFile.name);
+      const normalizedFile = new File([selectedFile], normalizedName, {
+        type: selectedFile.type,
+        lastModified: selectedFile.lastModified,
+      });
+
+      // Llamar función de upload con archivo normalizado
       await onUpload({
         title: title.trim(),
         description: description.trim(),
         classification,
-        file: selectedFile,
+        file: normalizedFile,
       });
 
       clearInterval(progressInterval);
