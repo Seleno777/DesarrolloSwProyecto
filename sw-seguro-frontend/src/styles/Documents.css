@@ -6,6 +6,7 @@
   background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%);
   position: relative;
   overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   margin: 0;
