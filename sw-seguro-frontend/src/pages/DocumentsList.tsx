@@ -6,6 +6,7 @@ import { useDocuments, useCreateDocument } from "../hooks/useDocuments";
 import { DocumentVersionService } from "../services/DocumentsService";
 import { FileUploadComponent } from "../components/FileUploadComponent";
 import ShareLinkModal from "../components/ShareLinkModal";
+import EditSharedDocumentModal from "../components/EditSharedDocumentModal"; // ✅ NUEVO
 import { supabase } from "../lib/supabase";
 
 type DocumentsTab =
@@ -138,9 +139,27 @@ export default function DocumentsPage() {
   const [highlightSharedId, setHighlightSharedId] = useState<string>("");
 
   // ----------------------------
+  // ✅ Modal para contraseña RESTRINGIDO (copiable)
+  // ----------------------------
+  const [showRestrictedPwd, setShowRestrictedPwd] = useState(false);
+  const [restrictedPwd, setRestrictedPwd] = useState("");
+  const [restrictedCopied, setRestrictedCopied] = useState(false);
+  const [restrictedCopyErr, setRestrictedCopyErr] = useState("");
+
+  // ----------------------------
   // ✅ PUBLIC permanent tokens
   // ----------------------------
   const [publicTokens, setPublicTokens] = useState<Record<string, string>>({});
+
+  // ----------------------------
+  // ✅ EDITAR Shared (subir nueva versión)
+  // ----------------------------
+  const [showEditSharedModal, setShowEditSharedModal] = useState(false);
+  const [editSharedCtx, setEditSharedCtx] = useState<{
+    documentId: string;
+    title: string;
+    classification: "public" | "private" | "confidential" | "restricted";
+  } | null>(null);
 
   useEffect(() => {
     const run = async () => {
@@ -184,7 +203,7 @@ export default function DocumentsPage() {
   useEffect(() => {
     if (effectiveTab !== "manage-access") return;
     if (manageDocId) return;
-    if (documents?.length) setManageDocId(documents[0].id);
+    if (documents?.length) setManageDocId((documents as any)[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTab, documents?.length]);
 
@@ -299,7 +318,7 @@ export default function DocumentsPage() {
   };
 
   // ----------------------------
-  // Handlers existentes + NUEVO restricted password
+  // Handlers existentes + NUEVO restricted password (copiable)
   // ----------------------------
   const handleCreateDocument = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -335,9 +354,20 @@ export default function DocumentsPage() {
 
         if (pErr) throw pErr;
 
-        alert(
-          "🔐 Contraseña RESTRINGIDO (guárdala, no se mostrará de nuevo):\n\n" + pwd
-        );
+        // ✅ mostrar modal + copiar
+        setRestrictedPwd(pwd);
+        setRestrictedCopied(false);
+        setRestrictedCopyErr("");
+        setShowRestrictedPwd(true);
+
+        try {
+          await navigator.clipboard.writeText(pwd);
+          setRestrictedCopied(true);
+        } catch {
+          setRestrictedCopyErr(
+            "No se pudo copiar automáticamente. Usa el botón Copiar."
+          );
+        }
       }
 
       // limpiar form
@@ -539,7 +569,9 @@ export default function DocumentsPage() {
         // solo dueño
         if (doc.owner_id !== user.id) throw new Error("No autorizado (restricted).");
 
-        const pwd = window.prompt("🔐 Este documento es RESTRINGIDO. Ingresa la contraseña:");
+        const pwd = window.prompt(
+          "🔐 Este documento es RESTRINGIDO. Ingresa la contraseña:"
+        );
         if (!pwd) return;
 
         const { data: ok, error: vErr } = await supabase.rpc(
@@ -710,6 +742,95 @@ export default function DocumentsPage() {
         }}
       />
 
+      {/* ✅ Modal Contraseña RESTRINGIDO (copiable) */}
+      {showRestrictedPwd && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: 16,
+          }}
+          onClick={() => setShowRestrictedPwd(false)}
+        >
+          <div
+            style={{
+              width: "min(520px, 95vw)",
+              background: "#fff",
+              borderRadius: 14,
+              padding: 16,
+              boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>🔐 Contraseña del documento RESTRINGIDO</h3>
+            <p style={{ marginTop: 6, opacity: 0.8, fontSize: 13 }}>
+              Guárdala ahora. Por seguridad, no se mostrará de nuevo.
+            </p>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <input
+                readOnly
+                value={restrictedPwd}
+                style={{
+                  flex: 1,
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  fontFamily: "monospace",
+                  fontSize: 13,
+                }}
+                onFocus={(e) => e.currentTarget.select()}
+              />
+
+              <button
+                className="btn btn-primary"
+                type="button"
+                onClick={async () => {
+                  setRestrictedCopyErr("");
+                  setRestrictedCopied(false);
+                  try {
+                    await navigator.clipboard.writeText(restrictedPwd);
+                    setRestrictedCopied(true);
+                  } catch {
+                    setRestrictedCopyErr(
+                      "No se pudo copiar. Copia manual: selecciona el texto y Ctrl+C."
+                    );
+                  }
+                }}
+              >
+                📋 Copiar
+              </button>
+            </div>
+
+            {(restrictedCopied || restrictedCopyErr) && (
+              <div style={{ marginTop: 10, fontSize: 13 }}>
+                {restrictedCopied && (
+                  <span style={{ color: "#16a34a" }}>✅ Copiado al portapapeles</span>
+                )}
+                {restrictedCopyErr && (
+                  <span style={{ color: "#dc2626" }}>❌ {restrictedCopyErr}</span>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={() => setShowRestrictedPwd(false)}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Tab Content */}
       <div className="tab-content">
         {/* My Documents */}
@@ -761,6 +882,7 @@ export default function DocumentsPage() {
                         <option value="confidential">🔐 Confidencial</option>
                         <option value="restricted">⛔ Restringido</option>
                       </select>
+
                       {classification === "restricted" && (
                         <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
                           Se generará una contraseña fuerte automáticamente (se muestra 1 sola vez).
@@ -818,7 +940,7 @@ export default function DocumentsPage() {
                 <div className="spinner"></div>
                 <p>Cargando documentos...</p>
               </div>
-            ) : documents.length === 0 ? (
+            ) : (documents as any[]).length === 0 ? (
               <div className="empty-state">
                 <div className="empty-icon">📭</div>
                 <h3>No tienes documentos todavía</h3>
@@ -832,7 +954,7 @@ export default function DocumentsPage() {
               </div>
             ) : (
               <div className="documents-grid">
-                {documents.map((doc: any) => (
+                {(documents as any[]).map((doc: any) => (
                   <div key={doc.id} className="document-card">
                     <div className="card-header">
                       <h3 className="card-title">{doc.title}</h3>
@@ -1057,10 +1179,19 @@ export default function DocumentsPage() {
                           </button>
                         )}
 
+                        {/* ✅ YA NO ES "pendiente": ahora abre modal para subir nueva versión */}
                         {grant.can_edit && (
                           <button
                             className="btn btn-sm btn-outline-danger"
-                            onClick={() => alert("✏️ Editar: (pendiente)")}
+                            onClick={() => {
+                              const d = grant.documents;
+                              setEditSharedCtx({
+                                documentId: grant.document_id,
+                                title: d?.title || "Documento",
+                                classification: (d?.classification || "private") as any,
+                              });
+                              setShowEditSharedModal(true);
+                            }}
                           >
                             ✏️ Editar
                           </button>
@@ -1108,10 +1239,10 @@ export default function DocumentsPage() {
                   onChange={(e) => setManageDocId(e.target.value)}
                   className="btn"
                   style={{ padding: "8px 10px" }}
-                  disabled={!documents?.length}
+                  disabled={!(documents as any[])?.length}
                 >
-                  {documents?.length ? (
-                    documents.map((d: any) => (
+                  {(documents as any[])?.length ? (
+                    (documents as any[]).map((d: any) => (
                       <option key={d.id} value={d.id}>
                         {d.title}
                       </option>
@@ -1132,7 +1263,7 @@ export default function DocumentsPage() {
                 <button
                   className="btn btn-primary"
                   onClick={() => {
-                    const doc = documents.find((d: any) => d.id === manageDocId);
+                    const doc = (documents as any[]).find((d: any) => d.id === manageDocId);
                     if (!doc) return;
                     if (doc.classification === "restricted") {
                       alert("⛔ Restringido no se puede compartir.");
@@ -1147,7 +1278,7 @@ export default function DocumentsPage() {
               </div>
             </div>
 
-            {!documents?.length ? (
+            {!(documents as any[])?.length ? (
               <div className="empty-state" style={{ marginTop: 16 }}>
                 <p>Crea un documento primero para gestionar accesos</p>
               </div>
@@ -1358,6 +1489,26 @@ export default function DocumentsPage() {
           </div>
         )}
       </div>
+
+      {/* ✅ MODAL EDITAR SHARED (subir nueva versión) */}
+      <EditSharedDocumentModal
+        isOpen={showEditSharedModal && !!editSharedCtx}
+        onClose={() => {
+          setShowEditSharedModal(false);
+          setEditSharedCtx(null);
+        }}
+        documentId={editSharedCtx?.documentId || ""}
+        documentTitle={editSharedCtx?.title || ""}
+        classification={(editSharedCtx?.classification || "private") as any}
+        watermarkText={`CONFIDENCIAL · ${user?.email || ""}`}
+        onUploadOk={() => {
+          alert("✅ Versión subida correctamente");
+          setShowEditSharedModal(false);
+          setEditSharedCtx(null);
+          loadSharedDocuments();
+        }}
+        onUploadFail={(msg) => alert("❌ Error al subir: " + msg)}
+      />
     </div>
   );
 }

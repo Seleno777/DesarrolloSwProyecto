@@ -10,8 +10,10 @@ export default function PublicDocument() {
   const [err, setErr] = useState<string>("");
   const [signedUrl, setSignedUrl] = useState<string>("");
 
-  const withPdfViewerParams = (url: string) => `${url}#zoom=page-width`;
-
+ 
+// ✅ Solo ajusta al ancho (sin forzar toolbar/navpanes)
+    const withPdfViewerParams = (url: string) => `${url}#zoom=page-width`;
+    
 
   useEffect(() => {
     const run = async () => {
