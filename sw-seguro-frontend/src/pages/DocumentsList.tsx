@@ -40,6 +40,30 @@ type ShareRecipientRow = {
   revoked_at: string | null;
 };
 
+type PublicDocLinkRow = {
+  document_id: string;
+  token: string;
+};
+
+function generateStrongPassword(len = 16) {
+  const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const lower = "abcdefghijklmnopqrstuvwxyz";
+  const digits = "0123456789";
+  const special = "!@#$%^&*()-_=+[]{};:,.<>?";
+  const all = upper + lower + digits + special;
+
+  const pick = (s: string) => s[Math.floor(Math.random() * s.length)];
+
+  // fuerza al menos 1 de cada
+  let out = pick(upper) + pick(lower) + pick(digits) + pick(special);
+  for (let i = out.length; i < len; i++) out += pick(all);
+
+  return out
+    .split("")
+    .sort(() => Math.random() - 0.5)
+    .join("");
+}
+
 export default function DocumentsPage() {
   const { user, signOut } = useAuth();
   const { documents, loading, error, refetch } = useDocuments();
@@ -71,20 +95,17 @@ export default function DocumentsPage() {
 
   const [activeTab, setActiveTab] = useState<DocumentsTab>("my-documents");
 
-  // effectiveTab:
   const effectiveTab: DocumentsTab = openDocId
     ? "shared-with-me"
     : allowedTabs.has(tabFromUrl as DocumentsTab)
     ? (tabFromUrl as DocumentsTab)
     : activeTab;
 
-  // sincroniza estado local con URL
   useEffect(() => {
     if (effectiveTab !== activeTab) setActiveTab(effectiveTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTab]);
 
-  // navegación de tabs: actualiza URL y elimina open
   const goTab = (tab: DocumentsTab) => {
     setActiveTab(tab);
     const sp = new URLSearchParams(location.search);
@@ -117,7 +138,38 @@ export default function DocumentsPage() {
   const [highlightSharedId, setHighlightSharedId] = useState<string>("");
 
   // ----------------------------
-  // ✅ Manage Access (NEW)
+  // ✅ PUBLIC permanent tokens
+  // ----------------------------
+  const [publicTokens, setPublicTokens] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const run = async () => {
+      const publicDocs = (documents || []).filter(
+        (d: any) => d.classification === "public"
+      );
+      if (!publicDocs.length) return;
+
+      const ids = publicDocs.map((d: any) => d.id);
+
+      const { data, error } = await supabase
+        .from("public_document_links")
+        .select("document_id, token")
+        .in("document_id", ids);
+
+      if (!error && data) {
+        const map: Record<string, string> = {};
+        for (const row of data as PublicDocLinkRow[]) {
+          map[row.document_id] = row.token;
+        }
+        setPublicTokens(map);
+      }
+    };
+
+    run();
+  }, [documents]);
+
+  // ----------------------------
+  // ✅ Manage Access
   // ----------------------------
   const [manageDocId, setManageDocId] = useState<string>("");
   const [links, setLinks] = useState<ShareLinkRow[]>([]);
@@ -129,7 +181,6 @@ export default function DocumentsPage() {
   const [loadingRecipients, setLoadingRecipients] = useState(false);
   const [recipientsErr, setRecipientsErr] = useState<string>("");
 
-  // auto-selecciona un doc cuando entras a Manage Access
   useEffect(() => {
     if (effectiveTab !== "manage-access") return;
     if (manageDocId) return;
@@ -154,7 +205,9 @@ export default function DocumentsPage() {
     try {
       const { data, error } = await supabase
         .from("share_links")
-        .select("id, document_id, created_at, expires_at, max_uses, uses_count, revoked_at")
+        .select(
+          "id, document_id, created_at, expires_at, max_uses, uses_count, revoked_at"
+        )
         .eq("document_id", docId)
         .order("created_at", { ascending: false });
 
@@ -179,8 +232,6 @@ export default function DocumentsPage() {
     setRecipients([]);
 
     try {
-      // ⚠️ OJO: si no creaste una POLICY SELECT para owner en share_link_recipients,
-      // esto puede dar 403. Igual lo manejamos sin romper la pantalla.
       const { data, error } = await supabase
         .from("share_link_recipients")
         .select(
@@ -202,7 +253,6 @@ export default function DocumentsPage() {
     }
   };
 
-  // recarga links al cambiar doc en Manage Access
   useEffect(() => {
     if (effectiveTab !== "manage-access") return;
     if (!manageDocId) return;
@@ -223,7 +273,6 @@ export default function DocumentsPage() {
       });
       if (error) throw error;
 
-      // refresca
       await loadShareLinks(manageDocId);
       setSelectedLinkId("");
       setRecipients([]);
@@ -243,7 +292,6 @@ export default function DocumentsPage() {
       });
       if (error) throw error;
 
-      // refresca recipients
       await loadRecipients(selectedLinkId);
     } catch (e: any) {
       alert("❌ No se pudo revocar el recipient: " + (e?.message || "Error"));
@@ -251,19 +299,57 @@ export default function DocumentsPage() {
   };
 
   // ----------------------------
-  // Handlers existentes
+  // Handlers existentes + NUEVO restricted password
   // ----------------------------
   const handleCreateDocument = async (e: React.FormEvent) => {
     e.preventDefault();
+
     try {
+      if (!user?.id) throw new Error("No autenticado");
+
+      // 1) crea documento (backend)
       await createDoc(title, description, classification);
+
+      // 2) si es restricted -> generar password fuerte y guardarlo (hash) 1 sola vez
+      if (classification === "restricted") {
+        // buscar doc recién creado (demo-friendly)
+        const { data: docRow, error: dErr } = await supabase
+          .from("documents")
+          .select("id")
+          .eq("owner_id", user.id)
+          .eq("title", title)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (dErr || !docRow?.id) {
+          throw dErr || new Error("No se pudo ubicar el documento creado");
+        }
+
+        const pwd = generateStrongPassword(16);
+
+        const { error: pErr } = await supabase.rpc("set_restricted_password_v2", {
+          p_document_id: docRow.id,
+          p_password: pwd,
+        });
+
+        if (pErr) throw pErr;
+
+        alert(
+          "🔐 Contraseña RESTRINGIDO (guárdala, no se mostrará de nuevo):\n\n" + pwd
+        );
+      }
+
+      // limpiar form
       setTitle("");
       setDescription("");
       setClassification("private");
       setShowCreateForm(false);
+
+      // refrescar list (para que trigger de public link aparezca)
       refetch();
-    } catch (err) {
-      console.error("Error creating document:", err);
+    } catch (err: any) {
+      alert("❌ Error creando documento: " + (err?.message || "Error desconocido"));
     }
   };
 
@@ -285,7 +371,6 @@ export default function DocumentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTab, user?.id]);
 
-  // ✅ Filtrar por grantee_id = user.id
   const loadSharedDocuments = async () => {
     if (!user?.id) {
       setSharedDocuments([]);
@@ -332,7 +417,6 @@ export default function DocumentsPage() {
     }
   };
 
-  // ✅ Auto-cerrar sesión cuando caduque el grant más cercano (solo estando en shared-with-me)
   useEffect(() => {
     if (effectiveTab !== "shared-with-me") return;
     if (!sharedDocuments?.length) return;
@@ -363,7 +447,6 @@ export default function DocumentsPage() {
     return () => window.clearTimeout(id);
   }, [effectiveTab, sharedDocuments, navigate]);
 
-  // ✅ Auto-limpieza: esconder grants expirados mientras estás en "Compartidos Conmigo"
   useEffect(() => {
     if (effectiveTab !== "shared-with-me") return;
 
@@ -383,7 +466,6 @@ export default function DocumentsPage() {
     return () => window.clearInterval(id);
   }, [effectiveTab]);
 
-  // ✅ scroll/highlight si viene open=... y limpiar open= para que no se quede “pegado”
   useEffect(() => {
     if (effectiveTab !== "shared-with-me") return;
     if (loadingShared) return;
@@ -439,8 +521,36 @@ export default function DocumentsPage() {
     navigate(`/documents/view/${docId}?mode=shared`);
   };
 
+  // ✅ Download con protección para restricted
   const handleDownload = async (docId: string) => {
     try {
+      if (!user?.id) throw new Error("No autenticado");
+
+      // si es restricted -> pedir contraseña y validar
+      const { data: doc, error: dErr } = await supabase
+        .from("documents")
+        .select("id, owner_id, classification")
+        .eq("id", docId)
+        .maybeSingle();
+
+      if (dErr) throw dErr;
+
+      if (doc?.classification === "restricted") {
+        // solo dueño
+        if (doc.owner_id !== user.id) throw new Error("No autorizado (restricted).");
+
+        const pwd = window.prompt("🔐 Este documento es RESTRINGIDO. Ingresa la contraseña:");
+        if (!pwd) return;
+
+        const { data: ok, error: vErr } = await supabase.rpc(
+          "verify_restricted_password_v2",
+          { p_document_id: docId, p_password: pwd }
+        );
+
+        if (vErr) throw vErr;
+        if (!ok) throw new Error("Contraseña incorrecta.");
+      }
+
       const versions = await DocumentVersionService.listVersions(docId);
       if (!versions || versions.length === 0) {
         alert("❌ No hay archivo para descargar");
@@ -594,7 +704,6 @@ export default function DocumentsPage() {
         documentTitle={selectedDocTitle}
         onClose={() => {
           setShowShareLinkModal(false);
-          // si estamos en manage-access, refresca links luego de cerrar
           if (effectiveTab === "manage-access" && manageDocId) {
             loadShareLinks(manageDocId);
           }
@@ -652,6 +761,21 @@ export default function DocumentsPage() {
                         <option value="confidential">🔐 Confidencial</option>
                         <option value="restricted">⛔ Restringido</option>
                       </select>
+                      {classification === "restricted" && (
+                        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+                          Se generará una contraseña fuerte automáticamente (se muestra 1 sola vez).
+                        </div>
+                      )}
+                      {classification === "public" && (
+                        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+                          Se creará un link permanente automáticamente.
+                        </div>
+                      )}
+                      {classification === "confidential" && (
+                        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+                          Al subir el PDF se aplicará una marca de agua.
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -708,16 +832,14 @@ export default function DocumentsPage() {
               </div>
             ) : (
               <div className="documents-grid">
-                {documents.map((doc) => (
+                {documents.map((doc: any) => (
                   <div key={doc.id} className="document-card">
                     <div className="card-header">
                       <h3 className="card-title">{doc.title}</h3>
                       <span
                         className="badge"
                         style={{
-                          backgroundColor: getClassificationColor(
-                            doc.classification
-                          ),
+                          backgroundColor: getClassificationColor(doc.classification),
                         }}
                       >
                         {getClassificationLabel(doc.classification)}
@@ -751,7 +873,12 @@ export default function DocumentsPage() {
 
                       <button
                         className="btn btn-sm btn-secondary"
-                        title="Compartir por link"
+                        title={
+                          doc.classification === "restricted"
+                            ? "Restringido no se puede compartir"
+                            : "Compartir por link"
+                        }
+                        disabled={doc.classification === "restricted"}
                         onClick={() => handleShareClick(doc.id, doc.title)}
                       >
                         🔗 Compartir
@@ -766,8 +893,53 @@ export default function DocumentsPage() {
                       </button>
                     </div>
 
+                    {/* ✅ Link permanente para PUBLIC */}
+                    {doc.classification === "public" && (
+                      <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                        {publicTokens[doc.id] ? (
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input
+                              readOnly
+                              value={`${window.location.origin}/public/${publicTokens[doc.id]}`}
+                              style={{
+                                flex: 1,
+                                padding: 8,
+                                borderRadius: 8,
+                                border: "1px solid #ddd",
+                                fontSize: 12,
+                              }}
+                            />
+                            <button
+                              className="btn btn-sm btn-secondary"
+                              onClick={() => {
+                                navigator.clipboard.writeText(
+                                  `${window.location.origin}/public/${publicTokens[doc.id]}`
+                                );
+                                alert("✅ Link público copiado");
+                              }}
+                            >
+                              📋 Copiar
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 12, opacity: 0.75 }}>
+                            Generando link público...
+                            <button
+                              className="btn btn-sm btn-secondary"
+                              style={{ marginLeft: 8 }}
+                              onClick={() => refetch()}
+                            >
+                              🔄
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <FileUploadComponent
                       documentId={doc.id}
+                      classification={doc.classification}
+                      watermarkText={`CONFIDENCIAL · ${user?.email || ""}`}
                       onUploadSuccess={() => {
                         alert("✅ Archivo subido exitosamente");
                         refetch();
@@ -848,9 +1020,7 @@ export default function DocumentsPage() {
                             ),
                           }}
                         >
-                          {getClassificationLabel(
-                            doc?.classification || "private"
-                          )}
+                          {getClassificationLabel(doc?.classification || "private")}
                         </span>
                       </div>
 
@@ -864,13 +1034,10 @@ export default function DocumentsPage() {
                         </div>
                         <div className="meta-item">
                           📅 Desde:{" "}
-                          {new Date(grant.created_at).toLocaleDateString(
-                            "es-ES"
-                          )}
+                          {new Date(grant.created_at).toLocaleDateString("es-ES")}
                         </div>
                       </div>
 
-                      {/* ✅ botones SOLO por permisos */}
                       <div className="card-actions">
                         {grant.can_view && (
                           <button
@@ -893,9 +1060,7 @@ export default function DocumentsPage() {
                         {grant.can_edit && (
                           <button
                             className="btn btn-sm btn-outline-danger"
-                            onClick={() =>
-                              alert("✏️ Editar: (pendiente de implementar)")
-                            }
+                            onClick={() => alert("✏️ Editar: (pendiente)")}
                           >
                             ✏️ Editar
                           </button>
@@ -923,7 +1088,7 @@ export default function DocumentsPage() {
           </div>
         )}
 
-        {/* Manage Access (UPDATED) */}
+        {/* Manage Access */}
         {effectiveTab === "manage-access" && (
           <div className="section-access">
             <div
@@ -946,7 +1111,7 @@ export default function DocumentsPage() {
                   disabled={!documents?.length}
                 >
                   {documents?.length ? (
-                    documents.map((d) => (
+                    documents.map((d: any) => (
                       <option key={d.id} value={d.id}>
                         {d.title}
                       </option>
@@ -967,8 +1132,12 @@ export default function DocumentsPage() {
                 <button
                   className="btn btn-primary"
                   onClick={() => {
-                    const doc = documents.find((d) => d.id === manageDocId);
+                    const doc = documents.find((d: any) => d.id === manageDocId);
                     if (!doc) return;
+                    if (doc.classification === "restricted") {
+                      alert("⛔ Restringido no se puede compartir.");
+                      return;
+                    }
                     handleShareClick(doc.id, doc.title);
                   }}
                   disabled={!manageDocId}
@@ -1046,7 +1215,6 @@ export default function DocumentsPage() {
                           </button>
                         </div>
 
-                        {/* Recipients panel */}
                         {selectedLinkId === l.id && (
                           <div
                             style={{
@@ -1081,9 +1249,8 @@ export default function DocumentsPage() {
                               >
                                 ⚠️ {recipientsErr}
                                 <div style={{ marginTop: 6, fontSize: 12 }}>
-                                  Si quieres ver recipients como dueño, necesitas
-                                  una policy SELECT para owner en{" "}
-                                  <code>share_link_recipients</code>.
+                                  Para ver recipients como dueño necesitas policy
+                                  SELECT owner en <code>share_link_recipients</code>.
                                 </div>
                               </div>
                             )}

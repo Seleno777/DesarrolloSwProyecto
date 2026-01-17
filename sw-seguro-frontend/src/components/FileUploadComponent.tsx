@@ -1,22 +1,74 @@
-import { useState } from "react";
+// src/components/FileUploadComponent.tsx
+import { useMemo, useState } from "react";
 import { DocumentVersionService } from "../services/DocumentsService";
 import { supabase } from "../lib/supabase";
+
+// ✅ Watermark (pdf-lib)
+import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
 
 interface FileUploadProps {
   documentId: string;
   onUploadSuccess: () => void;
   onUploadError: (error: string) => void;
+
+  // ✅ opcionales (por si luego lo conectas desde DocumentsList)
+  classification?: "public" | "private" | "confidential" | "restricted";
+  watermarkText?: string;
+}
+
+async function watermarkPdf(file: File, watermarkText: string) {
+  const bytes = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(bytes);
+
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const pages = pdfDoc.getPages();
+
+  for (const page of pages) {
+    const { width, height } = page.getSize();
+
+    page.drawText(watermarkText, {
+      x: width * 0.08,
+      y: height * 0.5,
+      size: 44,
+      font,
+      color: rgb(0.75, 0.75, 0.75),
+      rotate: degrees(25),
+      opacity: 0.25,
+    });
+  }
+   const outBytes = await pdfDoc.save();
+
+// Convierte Uint8Array -> ArrayBuffer exacto (slice correcto)
+const ab = outBytes.buffer.slice(
+  outBytes.byteOffset,
+  outBytes.byteOffset + outBytes.byteLength
+);
+
+const blob = new Blob([ab], { type: "application/pdf" });
+return new File([blob], file.name, { type: "application/pdf" });
+
+
+
+
 }
 
 export function FileUploadComponent({
   documentId,
   onUploadSuccess,
   onUploadError,
+  classification = "private",
+  watermarkText = "CONFIDENCIAL",
 }: FileUploadProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+
+  // ✅ evita IDs duplicados si hay muchos cards
+  const inputId = useMemo(
+    () => `file-input-${documentId}-${Math.random().toString(16).slice(2)}`,
+    [documentId]
+  );
 
   const handleFileSelect = (file: File | null) => {
     setError(null);
@@ -26,13 +78,13 @@ export function FileUploadComponent({
       return;
     }
 
-    // Validar que sea PDF
+    // Validar PDF
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
       setError("❌ Solo se permiten archivos PDF");
       return;
     }
 
-    // Validar tamaño (máximo 50MB)
+    // Máx 50MB
     if (file.size > 50 * 1024 * 1024) {
       setError("❌ El archivo no puede ser mayor a 50MB");
       return;
@@ -64,13 +116,18 @@ export function FileUploadComponent({
     setUploadProgress(0);
 
     try {
-      // 🔒 Forzar MIME PDF (no confiar en file.type)
       const forcedMime = "application/pdf";
 
-      // 1) Crear versión (DB) -> retorna { versionId, storagePath, versionNum }
+      // ✅ si es CONFIDENTIAL, aplicamos watermark antes de subir
+      const fileToUpload =
+        classification === "confidential"
+          ? await watermarkPdf(selectedFile, watermarkText)
+          : selectedFile;
+
+      // 1) Crear versión (DB) -> retorna { versionId, storagePath }
       const { versionId, storagePath } = await DocumentVersionService.createVersion(
         documentId,
-        selectedFile.name,
+        fileToUpload.name,
         forcedMime
       );
 
@@ -80,13 +137,11 @@ export function FileUploadComponent({
 
       setUploadProgress(30);
 
-      // 2) Subir al Storage usando EXACTAMENTE el storagePath del backend
-      const { error: uploadError } = await supabase.storage
-        .from("documents")
-        .upload(storagePath, selectedFile, {
-          contentType: forcedMime,
-          upsert: false,
-        });
+      // 2) Subir al Storage EXACTAMENTE con storagePath del backend
+      const { error: uploadError } = await supabase.storage.from("documents").upload(storagePath, fileToUpload, {
+        contentType: forcedMime,
+        upsert: false,
+      });
 
       if (uploadError) {
         console.error("Storage upload error:", uploadError);
@@ -95,18 +150,13 @@ export function FileUploadComponent({
 
       setUploadProgress(70);
 
-      // 3) Calcular SHA256
-      const sha256 = await calculateSHA256(selectedFile);
+      // 3) SHA256 del archivo realmente subido (si watermark => cambia)
+      const sha256 = await calculateSHA256(fileToUpload);
 
       setUploadProgress(85);
 
       // 4) Finalizar versión
-      await DocumentVersionService.finalizeVersion(
-        versionId,
-        selectedFile.size,
-        forcedMime,
-        sha256
-      );
+      await DocumentVersionService.finalizeVersion(versionId, fileToUpload.size, forcedMime, sha256);
 
       setUploadProgress(100);
 
@@ -115,7 +165,7 @@ export function FileUploadComponent({
         setSelectedFile(null);
         setUploadProgress(0);
         onUploadSuccess();
-      }, 1000);
+      }, 600);
     } catch (err: any) {
       const errorMsg = err?.message || "Error desconocido al subir archivo";
       setError(errorMsg);
@@ -128,6 +178,12 @@ export function FileUploadComponent({
   return (
     <div style={{ padding: "20px", border: "1px solid #e5e7eb", borderRadius: "8px", marginBottom: "20px" }}>
       <h3 style={{ marginTop: 0 }}>📄 Subir Archivo PDF</h3>
+
+      {classification === "confidential" && (
+        <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.8 }}>
+          🟠 Este documento es <b>CONFIDENCIAL</b>: se aplicará marca de agua al subir.
+        </div>
+      )}
 
       {error && (
         <div
@@ -157,12 +213,12 @@ export function FileUploadComponent({
         }}
         onClick={() => {
           if (!uploading) {
-            document.getElementById("file-input")?.click();
+            document.getElementById(inputId)?.click();
           }
         }}
       >
         <input
-          id="file-input"
+          id={inputId}
           type="file"
           accept=".pdf,application/pdf"
           onChange={(e) => handleFileSelect(e.target.files?.[0] || null)}
@@ -204,9 +260,7 @@ export function FileUploadComponent({
               }}
             />
           </div>
-          <p style={{ margin: "8px 0 0 0", fontSize: "14px", color: "#666" }}>
-            Cargando... {uploadProgress}%
-          </p>
+          <p style={{ margin: "8px 0 0 0", fontSize: "14px", color: "#666" }}>Cargando... {uploadProgress}%</p>
         </div>
       )}
 

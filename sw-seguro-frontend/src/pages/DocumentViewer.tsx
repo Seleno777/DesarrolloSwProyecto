@@ -1,3 +1,4 @@
+// src/pages/DocumentViewer.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -19,12 +20,10 @@ export default function DocumentViewer() {
   const [signedUrl, setSignedUrl] = useState<string>("");
   const [err, setErr] = useState<string>("");
 
-  // ✅ Expiración del GRANT (modo shared)
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
 
   // ✅ Para refrescar signedUrl sin duplicar timers
   const refreshTimerRef = useRef<number | null>(null);
-
   const clearRefreshTimer = () => {
     if (refreshTimerRef.current) {
       window.clearTimeout(refreshTimerRef.current);
@@ -32,19 +31,15 @@ export default function DocumentViewer() {
     }
   };
 
-  // ✅ Fuerza ajuste al ancho SIN habilitar toolbars extra
-  const withPdfViewerParams = (url: string) => {
-    // zoom=page-width: ajusta al ancho
-    // toolbar=0&navpanes=0: intenta ocultar barras (algunos browsers lo ignoran)
-    return `${url}#zoom=page-width&toolbar=0&navpanes=0`;
-  };
+  // ✅ Solo ajusta al ancho (sin forzar toolbar/navpanes)
+    const withPdfViewerParams = useMemo(() => {
+      return (url: string) => `${url}#zoom=page-width&toolbar=0&navpanes=0`;
+    }, []);
 
-  // ✅ Genera signedUrl y programa refresh antes de que expire
   const generateSignedUrl = async (storagePathRaw: string) => {
     const p0 = storagePathRaw.replace(/^\/+/, "");
     const path = p0.replace(/^documents\//, "");
 
-    // 5 minutos (más usable) y refrescamos antes de caducar
     const TTL_SECONDS = 60 * 5;
 
     const { data, error } = await supabase.storage
@@ -56,10 +51,8 @@ export default function DocumentViewer() {
 
     setSignedUrl(withPdfViewerParams(data.signedUrl));
 
-    // refresca 30s antes de expirar
     clearRefreshTimer();
     refreshTimerRef.current = window.setTimeout(() => {
-      // re-intenta refrescar (silencioso)
       generateSignedUrl(storagePathRaw).catch(() => {});
     }, Math.max(5_000, (TTL_SECONDS - 30) * 1000));
   };
@@ -76,8 +69,23 @@ export default function DocumentViewer() {
         if (!docId) throw new Error("docId inválido");
         if (!user?.id) throw new Error("No autenticado");
 
-        // ✅ Validación de permisos
+        // 1) cargar doc (clasificación y dueño)
+        const { data: docRow, error: dErr } = await supabase
+          .from("documents")
+          .select("id, owner_id, classification")
+          .eq("id", docId)
+          .maybeSingle();
+
+        if (dErr) throw dErr;
+        if (!docRow) throw new Error("Documento no existe.");
+
+        // 2) permisos por modo
         if (mode === "shared") {
+          // ⛔ restricted nunca debería compartirse (y si existe grant viejo, lo bloqueamos)
+          if (docRow.classification === "restricted") {
+            throw new Error("⛔ Documento RESTRINGIDO no se puede acceder por compartido.");
+          }
+
           const { data: grant, error: gErr } = await supabase
             .from("document_grants")
             .select("document_id, grantee_id, can_view, revoked_at, expires_at")
@@ -96,19 +104,29 @@ export default function DocumentViewer() {
 
           setExpiresAt(grant.expires_at || null);
         } else {
-          // ✅ modo owner: confirma que el doc es mío
-          const { data: doc, error: dErr } = await supabase
-            .from("documents")
-            .select("id, owner_id")
-            .eq("id", docId)
-            .maybeSingle();
+          // owner
+          if (docRow.owner_id !== user.id) {
+            throw new Error("No eres el dueño de este documento.");
+          }
 
-          if (dErr) throw dErr;
-          if (!doc) throw new Error("Documento no existe.");
-          if (doc.owner_id !== user.id) throw new Error("No eres el dueño de este documento.");
+          // ✅ restricted: pedir contraseña y verificar
+          if (docRow.classification === "restricted") {
+            const pwd = window.prompt("🔐 Documento RESTRINGIDO. Ingresa la contraseña:");
+            if (!pwd) {
+              throw new Error("Se requiere contraseña para ver este documento.");
+            }
+
+            const { data: ok, error: vErr } = await supabase.rpc(
+              "verify_restricted_password_v2",
+              { p_document_id: docId, p_password: pwd }
+            );
+
+            if (vErr) throw vErr;
+            if (!ok) throw new Error("Contraseña incorrecta.");
+          }
         }
 
-        // ✅ Obtener última versión
+        // 3) última versión
         const versions = await DocumentVersionService.listVersions(docId);
         if (!versions || versions.length === 0) {
           throw new Error("No hay archivo para ver.");

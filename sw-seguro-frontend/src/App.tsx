@@ -4,10 +4,9 @@ import LoginPage from "./pages/Login";
 import DocumentsList from "./pages/DocumentsList";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import ShareLinkAccess from "./pages/ShareLinkAccess";
-import "./styles/Auth.css";
 import DocumentViewer from "./pages/DocumentViewer";
-
-
+import PublicDocument from "./pages/PublicDocument"; // ✅ NUEVO
+import "./styles/Auth.css";
 
 export default function App() {
   return (
@@ -19,20 +18,13 @@ export default function App() {
 
           {/* Share link access (public) */}
           <Route path="/share/:token" element={<ShareLinkAccess />} />
-         
 
+          {/* ✅ Public document (NO login) */}
+          <Route path="/public/:token" element={<PublicDocument />} />
           
-<Route
-  path="/documents/view/:docId"
-  element={
-    <ProtectedRoute>
-      <DocumentViewer />
-    </ProtectedRoute>
-  }
-/>
 
-
-
+          {/* Viewer */}
+          <Route path="/documents/view/:docId" element={<DocumentViewer />} />
 
           {/* Protected routes */}
           <Route
