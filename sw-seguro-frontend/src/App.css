@@ -1,0 +1,156 @@
+/* ==================== FORZAR PANTALLA COMPLETA ==================== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  width: 100vw;
+  height: 100vh;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow-x: hidden;
+}
+
+body {
+  width: 100vw;
+  height: 100vh;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+  width: 100vw;
+  max-width: 100vw !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  text-align: left;
+  overflow-x: hidden;
+}
+
+/* Forzar contenedor de documentos a pantalla completa */
+.documents-container {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+}
+
+/* Forzar header a pantalla completa */
+.documents-header {
+  margin: 0 !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  padding-left: 24px !important;
+  padding-right: 24px !important;
+}
+
+/* Forzar tabs a pantalla completa */
+.documents-tabs {
+  margin: 0 !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* Ajustar tab-content */
+.tab-content {
+  max-width: 100vw !important;
+  width: 100vw !important;
+  margin: 0 !important;
+  padding: 32px 24px 60px 24px !important;
+  box-sizing: border-box !important;
+}
+
+/* Ajustar el grid */
+.documents-grid {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Ajustar section header */
+.section-header {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* Responsive adjustments */
+@media (min-width: 1920px) {
+  .tab-content {
+    padding: 32px 40px 60px 40px !important;
+  }
+  
+  .documents-header {
+    padding-left: 40px !important;
+    padding-right: 40px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .tab-content {
+    padding: 24px 16px 50px 16px !important;
+  }
+  
+  .documents-header {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .tab-content {
+    padding: 20px 12px 40px 12px !important;
+  }
+  
+  .documents-header {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+}
+
+/* Elementos originales de Vite */
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
