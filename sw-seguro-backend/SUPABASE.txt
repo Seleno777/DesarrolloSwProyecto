@@ -1,0 +1,8 @@
+Credenciales para SUPABASE
+
+Ingresar con GitHub
+email: marlow.armijo@epn.edu.ec
+contraseña: Marlow@2002
+
+En organización ir a: Software Seguro
+En proyecto ir a: gestor-documentos-dlp
